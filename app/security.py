@@ -76,10 +76,11 @@ def _before_request():
     if request.method not in SAFE_METHODS and not _csrf_ok():
         # Signed-out senders can't flood the audit log: they count toward the
         # per-IP limit, and once throttled their rejections aren't logged.
-        if g.session or not auth.ip_throttled(g.ip):
+        if g.session:
             audit.log("csrf_rejected", "security", outcome="failure", target=request.path)
-        if not g.session:
+        else:
             get_db().execute("INSERT INTO login_failures (ip, ts) VALUES (?, ?)", (g.ip, time.time()))
+            auth.log_rate_limited("csrf_rejected", "security", outcome="failure", target=request.path)
         abort(400)
 
     if endpoint is None or endpoint in PUBLIC_ENDPOINTS:

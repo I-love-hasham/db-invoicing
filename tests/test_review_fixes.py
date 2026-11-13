@@ -176,7 +176,7 @@ def test_F10_unknown_username_spraying_raises_alert(client, app, clock):
         client.post("/login", data={"csrf_token": token, "username": f"user{i}", "password": "x" * 12})
     with app.app_context():
         kinds = [r[0] for r in get_db().execute("SELECT kind FROM security_alerts")]
-    assert "failed_logins" in kinds
+    assert "ip_failed_logins" in kinds
 
 
 def test_F13_signed_out_csrf_spam_is_capped(client, app):
@@ -193,3 +193,108 @@ def test_F14_reloading_authenticator_page_keeps_same_secret(client, app, clock):
     first = re.search(r'<div class="secret">([A-Z2-7]+)</div>', client.get("/settings/authenticator").get_data(as_text=True)).group(1)
     second = re.search(r'<div class="secret">([A-Z2-7]+)</div>', client.get("/settings/authenticator").get_data(as_text=True)).group(1)
     assert first == second
+
+
+# ---------------------------------------------------------------- second review round
+
+def test_NA_pages_load_while_another_writer_holds_the_lock(client, app, clock):
+    import sqlite3
+    import time
+    do_setup(client, app, clock)
+    blocker = sqlite3.connect(os.path.join(app.config["DATA_DIR"], "app.db"), isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")           # simulate a slow writer
+    try:
+        t0 = time.time()
+        assert client.get("/").status_code == 200
+        assert client.get("/audit/").status_code == 200
+        assert time.time() - t0 < 2              # reads don't queue behind writers
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+
+def test_NB_no_phantom_audit_entry_when_page_render_fails(client, app, clock, monkeypatch):
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    do_setup(client, app, clock)
+    token = csrf(client, "/settings/password")
+    import app.views.settings_views as sv
+    real = sv.render_template
+
+    def boom(name, **kw):
+        if name == "settings/done.html":
+            raise RuntimeError("template broke")
+        return real(name, **kw)
+    monkeypatch.setattr(sv, "render_template", boom)
+    new = "Another-Long-Passphrase-42"
+    client.post("/settings/password", data={"csrf_token": token, "current_password": PASSWORD,
+                                            "new_password": new, "new_password_confirm": new})
+    with app.app_context():
+        logged = get_audit_db().execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'password_changed'").fetchone()[0]
+        alert = get_db().execute("SELECT COUNT(*) FROM security_alerts WHERE kind = 'password_changed'").fetchone()[0]
+        from werkzeug.security import check_password_hash
+        changed = check_password_hash(get_db().execute("SELECT password_hash FROM users").fetchone()[0], new)
+    assert changed and logged == 1 and alert == 1   # audit log matches what really happened
+
+
+def test_NC_removing_checkpoint_is_detected(client, app, clock):
+    do_setup(client, app, clock)
+    with app.app_context():
+        get_db().execute("DELETE FROM app_state WHERE key = 'audit_checkpoint'")
+        ok, _, msg = audit.verify_chain()
+    assert not ok and "checkpoint" in msg
+
+
+def test_NC_checkpoint_read_first_no_false_alarm(client, app, clock):
+    do_setup(client, app, clock)
+
+    def write(_):
+        c = app.test_client()
+        for _ in range(5):
+            token = csrf(c, "/login")
+            c.post("/login", data={"csrf_token": token, "username": "nobody", "password": "x" * 12})
+
+    def verify(_):
+        with app.app_context():
+            return all(audit.verify_chain()[0] for _ in range(10))
+    results = _parallel(lambda i: write(i) if i < 2 else verify(i), 3)
+    assert results[2] is True
+
+
+def test_ND_locked_account_still_runs_password_hash(client, app, clock, monkeypatch):
+    do_setup(client, app, clock)
+    _signed_out(client)
+    for _ in range(5):
+        do_login(client, app, clock, password="wrong-password-123")
+    from app import auth
+    calls = []
+    real = auth.check_password
+    monkeypatch.setattr(auth, "check_password", lambda u, p: calls.append(1) or real(u, p))
+    token = csrf(client, "/login")
+    client.post("/login", data={"csrf_token": token, "username": "david", "password": PASSWORD})
+    assert calls       # same scrypt work as an unknown user, so timing doesn't reveal the lock
+
+
+def test_NE_floods_dont_fill_audit_log(client, app, clock):
+    do_setup(client, app, clock)
+    _signed_out(client)
+    for _ in range(5):
+        do_login(client, app, clock, password="wrong-password-123")   # lock the account
+    for _ in range(60):
+        token = csrf(client, "/login")
+        client.post("/login", data={"csrf_token": token, "username": "david", "password": "y" * 12})
+    with app.app_context():
+        n = get_audit_db().execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action IN ('login_blocked_locked', 'login_throttled')"
+        ).fetchone()[0]
+    assert n <= 2
+
+
+def test_NF_password_like_username_not_logged(client, app, clock):
+    do_setup(client, app, clock)
+    _signed_out(client)
+    token = csrf(client, "/login")
+    client.post("/login", data={"csrf_token": token, "username": "Correct.Horse-Battery9", "password": "x" * 12})
+    with app.app_context():
+        dump = " ".join(str(tuple(r)) for r in get_audit_db().execute("SELECT * FROM audit_log"))
+    assert "Correct.Horse-Battery9" not in dump

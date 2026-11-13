@@ -1,13 +1,14 @@
 """SQLite access. Parameterized queries only, everywhere in the app.
 
-Each request runs in ONE write transaction on app.db (BEGIN IMMEDIATE on first
-use). That serializes requests, so checks like "is the account locked?" or
-"was this 2FA code already used?" can't be raced by parallel requests. The
-transaction commits just before the response is sent, and rolls back on any
-error, so a change is never kept when its audit entry couldn't be written.
+Reads run without locks. Every write that matters runs inside `atomic()`: one
+short BEGIN IMMEDIATE transaction that also writes the audit entry before it
+commits. If the audit write fails, the change is rolled back, so nothing is
+ever kept without its audit record. Slow work (password hashing) happens
+outside these locks so a flood of sign-in attempts can't stall the app.
 """
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from flask import current_app, g
@@ -30,9 +31,7 @@ def _path(name: str) -> str:
 
 def get_db() -> sqlite3.Connection:
     if "_db" not in g:
-        conn = _connect(_path("app.db"))
-        conn.execute("BEGIN IMMEDIATE")
-        g._db = conn
+        g._db = _connect(_path("app.db"))
     return g._db
 
 
@@ -42,24 +41,27 @@ def get_audit_db() -> sqlite3.Connection:
     return g._audit_db
 
 
-def finish(commit: bool) -> None:
-    """Commit (or roll back) the request's app.db transaction."""
-    conn = g.get("_db")
-    if conn is not None and conn.in_transaction:
-        conn.execute("COMMIT" if commit else "ROLLBACK")
-
-
-def _commit_before_response(response):
-    # Runs before the response leaves the server. 5xx = something failed: roll back.
-    finish(commit=response.status_code < 500)
-    return response
+@contextmanager
+def atomic():
+    """One short write transaction on app.db (nested calls join the outer one)."""
+    conn = get_db()
+    if conn.in_transaction:
+        yield conn
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 def _close(exc=None):
     conn = g.pop("_db", None)
     if conn is not None:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK" if exc is not None else "COMMIT")
+        if conn.in_transaction:  # an atomic() block never finished: discard it
+            conn.execute("ROLLBACK")
         conn.close()
     audit_conn = g.pop("_audit_db", None)
     if audit_conn is not None:
@@ -78,6 +80,4 @@ def init_app(app):
         finally:
             conn.close()
         os.chmod(path, 0o600)
-    # Registered first => runs LAST among after_request hooks (Flask runs them in reverse).
-    app.after_request(_commit_before_response)
     app.teardown_appcontext(_close)

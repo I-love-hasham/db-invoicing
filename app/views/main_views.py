@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Blueprint, abort, current_app, g, redirect, render_template, url_for
 
 from .. import audit, auth
-from ..db import get_db
+from ..db import atomic, get_db
 
 bp = Blueprint("main", __name__)
 VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
@@ -63,15 +63,15 @@ def dashboard():
 
 @bp.route("/alerts/<int:alert_id>/ack", methods=["POST"])
 def ack_alert(alert_id: int):
-    db = get_db()
-    row = db.execute("SELECT * FROM security_alerts WHERE id = ? AND acknowledged_at IS NULL",
-                     (alert_id,)).fetchone()
-    if row is None:
-        abort(404)
-    db.execute("UPDATE security_alerts SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ?",
-               (audit.utcnow_iso(), g.user["username"], alert_id))
-    audit.log("alert_acknowledged", "security", target=f"alert:{alert_id}",
-              details={"kind": row["kind"], "message": row["message"]})
+    with atomic() as db:
+        row = db.execute("SELECT * FROM security_alerts WHERE id = ? AND acknowledged_at IS NULL",
+                         (alert_id,)).fetchone()
+        if row is None:
+            abort(404)
+        db.execute("UPDATE security_alerts SET acknowledged_at = ?, acknowledged_by = ? WHERE id = ?",
+                   (audit.utcnow_iso(), g.user["username"], alert_id))
+        audit.log("alert_acknowledged", "security", target=f"alert:{alert_id}",
+                  details={"kind": row["kind"], "message": row["message"]})
     return redirect(url_for("main.dashboard"))
 
 

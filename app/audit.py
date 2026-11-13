@@ -114,14 +114,22 @@ def _save_checkpoint(count: int, entry_hash: str) -> None:
     )
 
 
-def _check_checkpoint(entries: list) -> str | None:
-    """Problem text if the log is shorter than, or doesn't contain, the highest entry ever written."""
+def _read_checkpoint():
     row = get_db().execute("SELECT value FROM app_state WHERE key = 'audit_checkpoint'").fetchone()
-    if row is None:
-        has_users = get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone()
-        if has_users and not entries:
-            return "The audit log is empty but the app has accounts — it was deleted or replaced."
+    has_users = get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
+    return (row["value"] if row else None), has_users
+
+
+def _check_checkpoint(checkpoint: tuple, entries: list) -> str | None:
+    """Problem text if the log is shorter than, or doesn't contain, the highest entry ever written."""
+    value, has_users = checkpoint
+    if value is None:
+        # Account creation is always audited (with a checkpoint) in the same transaction,
+        # so accounts without a checkpoint means the checkpoint was removed.
+        if has_users:
+            return "The audit checkpoint is missing — audit data was deleted or replaced."
         return None
+    row = {"value": value}
     try:
         count_s, entry_hash, mac = row["value"].split("|")
         count = int(count_s)
@@ -139,6 +147,7 @@ def _check_checkpoint(entries: list) -> str | None:
 
 def verify_chain() -> tuple[bool, int, str]:
     """Walk the whole chain. Returns (ok, entries_checked, message)."""
+    checkpoint = _read_checkpoint()   # read FIRST: entries written after it are fine
     conn = get_audit_db()
     prev = GENESIS
     count = 0
@@ -152,7 +161,7 @@ def verify_chain() -> tuple[bool, int, str]:
         if not hmac.compare_digest(row["entry_hash"], _mac(prev + "|" + _payload(entry))):
             return False, count, f"Entry #{row['id']} was altered."
         prev = row["entry_hash"]
-    problem = _check_checkpoint(hashes)
+    problem = _check_checkpoint(checkpoint, hashes)
     if problem:
         return False, count, problem
     head = conn.execute("SELECT * FROM audit_head WHERE id = 1").fetchone()

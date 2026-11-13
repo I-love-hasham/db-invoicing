@@ -4,7 +4,7 @@ import hmac
 from flask import Blueprint, abort, current_app, g, redirect, render_template, request, url_for
 
 from .. import audit, auth, crypto, totp
-from ..db import get_db
+from ..db import atomic, get_db
 
 bp = Blueprint("auth", __name__)
 
@@ -12,12 +12,17 @@ bp = Blueprint("auth", __name__)
 # which usernames exist. The real reason is in the audit log (and an alert).
 GENERIC_FAIL = ("Sign-in failed. Check your username and password. After 5 failed "
                 "attempts the account is locked for 15 minutes.")
-LOCKED_MSG = GENERIC_FAIL
 THROTTLED_MSG = "Too many failed attempts from your network. Try again later."
 
 
 def _enrolled_user_exists() -> bool:
     return get_db().execute("SELECT 1 FROM users WHERE totp_enabled = 1 LIMIT 1").fetchone() is not None
+
+
+def _blocked_response(attempt, template="login.html"):
+    if attempt.status == "throttled":
+        return render_template(template, error=THROTTLED_MSG), 429
+    return render_template(template, error=GENERIC_FAIL), 401
 
 
 # ---------------------------------------------------------------- setup
@@ -29,17 +34,19 @@ def setup():
     if request.method == "GET":
         return render_template("setup.html")
 
-    if auth.ip_throttled(g.ip):
-        audit.log("setup_throttled", "auth", outcome="failure")
-        return render_template("setup.html", error=THROTTLED_MSG), 429
-
     form = request.form
     username = form.get("username", "").strip()
-    password = form.get("password", "")
+    attempt = auth.begin_attempt(None)
+    if attempt.blocked:
+        auth.blocked_attempt(attempt, None)
+        return render_template("setup.html", error=THROTTLED_MSG), 429
     if not hmac.compare_digest(form.get("setup_token", "").encode(),
                                current_app.config["SETUP_TOKEN"].encode()):
-        auth.register_failure(None, "setup_token_invalid", attempted_username=username[:64])
-        return render_template("setup.html", error="Setup token is incorrect.", username=username), 403
+        auth.end_attempt(attempt, None, False, "setup_token_invalid")
+        return render_template("setup.html", error="Setup token is incorrect."), 403
+    auth.end_attempt(attempt, None, True)
+
+    password = form.get("password", "")
     if not auth.USERNAME_RE.match(username):
         return render_template("setup.html", error="Username: 3–32 letters, numbers, . _ or -.",
                                username=username), 400
@@ -49,18 +56,21 @@ def setup():
     if problem:
         return render_template("setup.html", error=problem, username=username), 400
 
-    db = get_db()
+    password_hash = auth.hash_password(password)   # slow: done before taking the lock
     now = audit.utcnow_iso()
-    # An abandoned, never-finished setup is replaced (needs the setup token again).
-    db.execute("DELETE FROM users WHERE totp_enabled = 0")
-    cur = db.execute(
-        "INSERT INTO users (username, password_hash, totp_secret_enc, created_at, password_changed_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (username, auth.hash_password(password), crypto.encrypt(totp.new_secret()), now, now),
-    )
-    g.user = {"id": cur.lastrowid, "username": username}
-    audit.log("user_created", "auth", target=f"user:{username}")
-    auth.start_session(cur.lastrowid, "enroll")
+    with atomic() as db:
+        if _enrolled_user_exists():
+            abort(404)
+        # An abandoned, never-finished setup is replaced (needs the setup token again).
+        db.execute("DELETE FROM users WHERE totp_enabled = 0")
+        cur = db.execute(
+            "INSERT INTO users (username, password_hash, totp_secret_enc, created_at, password_changed_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, crypto.encrypt(totp.new_secret()), now, now),
+        )
+        g.user = {"id": cur.lastrowid, "username": username}
+        audit.log("user_created", "auth", target=f"user:{username}")
+        auth.start_session(cur.lastrowid, "enroll")
     return redirect(url_for("auth.setup_2fa"))
 
 
@@ -70,22 +80,25 @@ def setup_2fa():
         return redirect(url_for("auth.login"))
     user = auth.get_user(g.user["id"])
     secret = auth.user_totp_secret(user)
-    uri = totp.provisioning_uri(secret, user["username"])
-    ctx = {"secret": secret, "qr": totp.qr_data_uri(uri)}
-
+    ctx = {"secret": secret, "qr": totp.qr_data_uri(totp.provisioning_uri(secret, user["username"]))}
     if request.method == "GET":
         return render_template("setup_2fa.html", **ctx)
 
-    if not auth.check_totp(user, request.form.get("code", "").strip()):
-        audit.log("2fa_enroll_failed", "auth", outcome="failure")
+    with atomic() as db:
+        if not auth.check_totp(user, request.form.get("code", "").strip()):
+            audit.log("2fa_enroll_failed", "auth", outcome="failure")
+            ok = False
+        else:
+            ok = True
+            db.execute("UPDATE users SET totp_enabled = 1 WHERE id = ?", (user["id"],))
+            codes = auth.generate_backup_codes(user["id"])
+            audit.log("2fa_enrolled", "auth", details={"method": "totp", "backups_issued": len(codes)})
+            auth.check_known_device(user["id"], user["username"])  # this device becomes the baseline
+            auth.start_session(user["id"], "full")
+            audit.log("login_success", "auth", details={"via": "initial_setup"})
+    if not ok:
         return render_template("setup_2fa.html", error="That code didn't match. Check the time on "
                                                        "your phone and try the next code.", **ctx), 400
-    get_db().execute("UPDATE users SET totp_enabled = 1 WHERE id = ?", (user["id"],))
-    codes = auth.generate_backup_codes(user["id"])
-    audit.log("2fa_enrolled", "auth", details={"method": "totp", "backups_issued": len(codes)})
-    auth.check_known_device(user["id"], user["username"])  # records this device as the baseline
-    auth.start_session(user["id"], "full")
-    audit.log("login_success", "auth", details={"via": "initial_setup"})
     return render_template("backup_codes.html", codes=codes, first_time=True)
 
 
@@ -100,25 +113,45 @@ def login():
     if request.method == "GET":
         return render_template("login.html")
 
-    if auth.ip_throttled(g.ip):
-        audit.log("login_throttled", "auth", outcome="failure")
-        return render_template("login.html", error=THROTTLED_MSG), 429
-
     username = request.form.get("username", "").strip()[:64]
     password = request.form.get("password", "")
     user = get_db().execute("SELECT * FROM users WHERE username = ? AND totp_enabled = 1",
                             (username,)).fetchone()
-    if auth.is_locked(user):
-        audit.log("login_blocked_locked", "auth", outcome="failure", username=user["username"])
-        return render_template("login.html", error=GENERIC_FAIL), 401
-    if not auth.check_password(user, password):
-        locked = auth.register_failure(user, "login_password_failed", attempted_username=username)
+    attempt = auth.begin_attempt(user)
+    if attempt.blocked:
+        auth.blocked_attempt(attempt, user, password)
+        return _blocked_response(attempt)
+    if not auth.check_password(user, password):      # slow check, no lock held
+        auth.end_attempt(attempt, user, False, "login_password_failed")
         return render_template("login.html", error=GENERIC_FAIL), 401
 
-    g.user = {"id": user["id"], "username": user["username"]}
-    audit.log("login_password_ok", "auth")
-    auth.start_session(user["id"], "password")
+    with atomic():
+        auth.end_attempt(attempt, user, True)   # password alone doesn't clear earlier failures
+        g.user = {"id": user["id"], "username": user["username"]}
+        audit.log("login_password_ok", "auth")
+        auth.start_session(user["id"], "password")
     return redirect(url_for("auth.login_2fa"))
+
+
+def _second_factor(user, code: str, fail_reason: str):
+    """Shared by sign-in and re-auth. Returns (method, response_if_failed)."""
+    attempt = auth.begin_attempt(user)
+    if attempt.blocked:
+        auth.blocked_attempt(attempt, user)
+        with atomic():
+            auth.end_session()
+        return None, _blocked_response(attempt)
+    method = auth.verify_second_factor(user, code)   # backup-code checks are slow: no lock held
+    if method is None:
+        if auth.end_attempt(attempt, user, False, fail_reason):
+            with atomic():
+                auth.end_session()
+            return None, (render_template("login.html", error=GENERIC_FAIL), 401)
+        return None, None
+    with atomic():
+        auth.end_attempt(attempt, user, True)
+        auth.reset_failures(user["id"])
+    return method, None
 
 
 @bp.route("/login/2fa", methods=["GET", "POST"])
@@ -129,26 +162,20 @@ def login_2fa():
         return render_template("login_2fa.html")
 
     user = auth.get_user(g.user["id"])
-    if auth.is_locked(user):
-        auth.end_session()
-        return render_template("login.html", error=LOCKED_MSG), 401
-
-    method = auth.verify_second_factor(user, request.form.get("code", ""))
+    method, failed = _second_factor(user, request.form.get("code", ""), "2fa_failed")
+    if failed:
+        return failed
     if method is None:
-        locked = auth.register_failure(user, "2fa_failed")
-        if locked:
-            auth.end_session()
-            return render_template("login.html", error=LOCKED_MSG), 401
         return render_template("login_2fa.html", error="That code didn't work."), 401
 
-    auth.reset_failures(user["id"])
-    auth.start_session(user["id"], "full")
-    left = auth.backup_codes_left(user["id"])
-    audit.log("login_success", "auth", details={"second_factor": method})
-    if method == "backup_code":
-        audit.raise_alert("backup_code_used", f"A backup code was used to sign in to '{user['username']}' "
-                                              f"from {g.ip}. {left} backup codes left.")
-    auth.check_known_device(user["id"], user["username"])
+    with atomic():
+        auth.start_session(user["id"], "full")
+        audit.log("login_success", "auth", details={"second_factor": method})
+        if method == "backup_code":
+            audit.raise_alert("backup_code_used",
+                              f"A backup code was used to sign in to '{user['username']}' from {g.ip}. "
+                              f"{auth.backup_codes_left(user['id'])} backup codes left.")
+        auth.check_known_device(user["id"], user["username"])
     return redirect(url_for("main.dashboard"))
 
 
@@ -160,25 +187,24 @@ def reauth():
     if request.method == "GET":
         return render_template("reauth.html", next=nxt)
     user = auth.get_user(g.user["id"])
-    method = auth.verify_second_factor(user, request.form.get("code", ""))
+    method, failed = _second_factor(user, request.form.get("code", ""), "2fa_reauth_failed")
+    if failed:
+        return redirect(url_for("auth.login"))
     if method is None:
-        locked = auth.register_failure(user, "2fa_reauth_failed")
-        if locked:
-            auth.end_session()
-            return redirect(url_for("auth.login"))
         return render_template("reauth.html", next=nxt, error="That code didn't work."), 401
-    auth.reset_failures(user["id"])
-    auth.mark_reauth()
-    audit.log("2fa_reauth_ok", "auth", details={"second_factor": method})
-    if method == "backup_code":
-        audit.raise_alert("backup_code_used", f"A backup code was used to confirm a sensitive change "
-                                              f"from {g.ip}. {auth.backup_codes_left(user['id'])} left.")
+    with atomic():
+        auth.mark_reauth()
+        audit.log("2fa_reauth_ok", "auth", details={"second_factor": method})
+        if method == "backup_code":
+            audit.raise_alert("backup_code_used", f"A backup code was used to confirm a sensitive change "
+                                                  f"from {g.ip}. {auth.backup_codes_left(user['id'])} left.")
     return redirect(nxt)
 
 
 @bp.route("/logout", methods=["POST"])
 def logout():
-    if g.session:
-        audit.log("logout", "auth")
-    auth.end_session()
+    with atomic():
+        if g.session:
+            audit.log("logout", "auth")
+        auth.end_session()
     return redirect(url_for("auth.login"))

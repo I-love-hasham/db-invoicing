@@ -9,7 +9,7 @@ from flask import current_app, g, redirect, request, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import audit, crypto, totp
-from .db import get_db
+from .db import atomic, get_db
 
 LOCK_THRESHOLD = 5          # failed attempts before lockout
 LOCK_SECONDS = 15 * 60
@@ -54,57 +54,140 @@ def password_problem(password: str, username: str) -> str | None:
 
 
 # ---------------------------------------------------------------- lockout / throttling
+#
+# Every password / 2FA / setup-token check is bracketed by begin_attempt() and
+# end_attempt(). begin_attempt() *reserves* the attempt atomically (counts it
+# toward the account and the IP) BEFORE the slow check runs, so parallel
+# requests can never get more than 5 guesses in. A successful check gives the
+# reservation back.
 
-def ip_throttled(ip: str) -> bool:
-    row = get_db().execute(
-        "SELECT COUNT(*) AS n FROM login_failures WHERE ip = ? AND ts > ?",
-        (ip, time.time() - IP_WINDOW),
-    ).fetchone()
-    return row["n"] >= IP_MAX_FAILURES
+class Attempt:
+    def __init__(self, status: str, count: int = 0, row_id: int | None = None):
+        self.status = status      # "ok", "locked" or "throttled"
+        self.count = count        # this attempt's number toward the account lockout
+        self.row_id = row_id      # its row in login_failures (per-IP counter)
+
+    @property
+    def blocked(self) -> bool:
+        return self.status != "ok"
 
 
-def is_locked(user) -> bool:
-    return bool(user and user["locked_until"] and user["locked_until"] > time.time())
+def _ip_failures(now: float) -> int:
+    return get_db().execute("SELECT COUNT(*) AS n FROM login_failures WHERE ip = ? AND ts > ?",
+                            (g.ip, now - IP_WINDOW)).fetchone()["n"]
 
 
-def register_failure(user, reason: str, attempted_username: str | None = None) -> bool:
-    """Record a failed password / 2FA / setup attempt. Returns True if the account is now locked."""
-    db = get_db()
+def begin_attempt(user) -> Attempt:
     now = time.time()
-    db.execute("INSERT INTO login_failures (ip, ts) VALUES (?, ?)", (g.ip, now))
-    db.execute("DELETE FROM login_failures WHERE ts < ?", (now - 86400,))
-    name = user["username"] if user else loggable_username(attempted_username)
-    audit.log(reason, "auth", outcome="failure", username=name,
-              details={"unknown_username": True} if not user else None)
-    ip_failures = db.execute("SELECT COUNT(*) AS n FROM login_failures WHERE ip = ? AND ts > ?",
-                             (g.ip, now - IP_WINDOW)).fetchone()["n"]
-    if ip_failures == IP_MAX_FAILURES:
-        audit.raise_alert("ip_throttled", f"{ip_failures} failed sign-in attempts from {g.ip} in 15 minutes. "
-                                          "That address is now blocked from signing in for a while.")
-    if not user:
-        if ip_failures == ALERT_THRESHOLD:
-            audit.raise_alert("failed_logins", f"{ip_failures} failed sign-in attempts from {g.ip} "
-                                               "(unknown username or bad setup token).")
+    with atomic() as db:
+        if _ip_failures(now) >= IP_MAX_FAILURES:
+            return Attempt("throttled")
+        row_id = db.execute("INSERT INTO login_failures (ip, ts) VALUES (?, ?)", (g.ip, now)).lastrowid
+        db.execute("DELETE FROM login_failures WHERE ts < ?", (now - 86400,))
+        if user is None:
+            return Attempt("ok", 0, row_id)
+        row = db.execute("SELECT failed_count, locked_until FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if (row["locked_until"] and row["locked_until"] > now) or row["failed_count"] >= LOCK_THRESHOLD:
+            return Attempt("locked", 0, row_id)   # still counts toward the IP limit
+        count = db.execute("UPDATE users SET failed_count = failed_count + 1 WHERE id = ? RETURNING failed_count",
+                           (user["id"],)).fetchone()["failed_count"]
+        return Attempt("ok", count, row_id)
+
+
+def end_attempt(attempt: Attempt, user, success: bool, reason: str | None = None) -> bool:
+    """Close a reserved attempt. Returns True if the account is now locked."""
+    with atomic() as db:
+        if success:
+            db.execute("DELETE FROM login_failures WHERE id = ?", (attempt.row_id,))
+            if user is not None:
+                db.execute("UPDATE users SET failed_count = MAX(failed_count - 1, 0) WHERE id = ?", (user["id"],))
+            return False
+        name = user["username"] if user is not None else "[unknown]"
+        audit.log(reason, "auth", outcome="failure", username=name,
+                  details={"unknown_username": True} if user is None else None)
+        _ip_alerts()
+        if user is None:
+            return False
+        if attempt.count >= LOCK_THRESHOLD:
+            db.execute("UPDATE users SET failed_count = 0, locked_until = ? WHERE id = ?",
+                       (time.time() + LOCK_SECONDS, user["id"]))
+            db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+            audit.log("account_locked", "auth", outcome="failure", username=name,
+                      details={"minutes": LOCK_SECONDS // 60, "failed_attempts": attempt.count})
+            audit.raise_alert("lockout", f"Account '{name}' was locked for 15 minutes after "
+                                         f"{attempt.count} failed sign-in attempts (last from {g.ip}).")
+            return True
+        if attempt.count == ALERT_THRESHOLD:
+            audit.raise_alert("failed_logins", f"{attempt.count} failed sign-in attempts in a row for "
+                                               f"'{name}' (last from {g.ip}).")
         return False
-    count = user["failed_count"] + 1
-    if count >= LOCK_THRESHOLD:
-        db.execute("UPDATE users SET failed_count = 0, locked_until = ? WHERE id = ?",
-                   (now + LOCK_SECONDS, user["id"]))
-        db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
-        audit.log("account_locked", "auth", outcome="failure", username=name,
-                  details={"minutes": LOCK_SECONDS // 60, "failed_attempts": count})
-        audit.raise_alert("lockout", f"Account '{name}' was locked for 15 minutes after "
-                                     f"{count} failed sign-in attempts (last from {g.ip}).")
-        return True
-    db.execute("UPDATE users SET failed_count = ? WHERE id = ?", (count, user["id"]))
-    if count == ALERT_THRESHOLD:
-        audit.raise_alert("failed_logins", f"{count} failed sign-in attempts in a row for "
-                                           f"'{name}' (last from {g.ip}).")
-    return False
+
+
+def _ip_alerts() -> None:
+    n = _ip_failures(time.time())
+    if n >= IP_MAX_FAILURES:
+        alert_once("ip_throttled", f"{n} failed attempts from {g.ip} in 15 minutes. That address "
+                                   "is blocked from signing in for a while.")
+    elif n >= ALERT_THRESHOLD:
+        alert_once("ip_failed_logins", f"{n} failed sign-in attempts from {g.ip} in 15 minutes.")
+
+
+def blocked_attempt(attempt: Attempt, user, password: str | None = None) -> None:
+    """Locked or throttled: same work and same answer as a wrong password."""
+    if password is not None:
+        check_password(None, password)   # equal timing: always run one scrypt check
+    action = "login_blocked_locked" if attempt.status == "locked" else "login_throttled"
+    log_rate_limited(action, "auth", outcome="failure",
+                     username=user["username"] if user is not None else "[unknown]")
+    _ip_alerts()
 
 
 def reset_failures(user_id: int) -> None:
     get_db().execute("UPDATE users SET failed_count = 0, locked_until = NULL WHERE id = ?", (user_id,))
+
+
+def _window_state(key: str, now: float):
+    row = get_db().execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None, 0
+    start, _, suppressed = row["value"].partition("|")
+    try:
+        return float(start), int(suppressed or 0)
+    except ValueError:
+        return None, 0
+
+
+def log_rate_limited(action: str, category: str, **kwargs) -> None:
+    """At most one audit entry per action per IP per 15 minutes; the next one
+    reports how many were skipped. Keeps floods from filling the disk."""
+    now = time.time()
+    key = f"rl:{action}:{g.ip}"
+    with atomic() as db:
+        start, suppressed = _window_state(key, now)
+        if start is not None and now - start < IP_WINDOW:
+            db.execute("UPDATE app_state SET value = ? WHERE key = ?", (f"{start}|{suppressed + 1}", key))
+            return
+        details = dict(kwargs.pop("details", None) or {})
+        if suppressed:
+            details["repeats_not_logged_in_last_window"] = suppressed
+        audit.log(action, category, details=details or None, **kwargs)
+        db.execute("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET"
+                   " value = excluded.value", (key, f"{now}|0"))
+        db.execute("DELETE FROM app_state WHERE (key LIKE 'rl:%' OR key LIKE 'alert:%')"
+                   " AND CAST(substr(value, 1, instr(value || '|', '|') - 1) AS REAL) < ?", (now - 86400,))
+
+
+def alert_once(kind: str, message: str) -> None:
+    """Raise an alert for this IP at most once per 15 minutes."""
+    now = time.time()
+    key = f"alert:{kind}:{g.ip}"
+    with atomic() as db:
+        start, _ = _window_state(key, now)
+        if start is not None and now - start < IP_WINDOW:
+            return
+        audit.raise_alert(kind, message)
+        db.execute("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET"
+                   " value = excluded.value", (key, f"{now}|0"))
 
 
 # ---------------------------------------------------------------- 2FA
@@ -277,13 +360,6 @@ def safe_next(target: str | None, default: str) -> str:
     if target and _SAFE_PATH.match(target) and not target.startswith("//") and len(target) <= 200:
         return target
     return default
-
-
-def loggable_username(name: str | None) -> str | None:
-    """Never log free text from the username box: it might be a mistyped password."""
-    if name is None:
-        return None
-    return name if USERNAME_RE.match(name) else "[not a valid username]"
 
 
 # ---------------------------------------------------------------- devices
