@@ -40,8 +40,8 @@ def setup():
     if attempt.blocked:
         auth.blocked_attempt(attempt, None)
         return render_template("setup.html", error=THROTTLED_MSG), 429
-    if not hmac.compare_digest(form.get("setup_token", "").encode(),
-                               current_app.config["SETUP_TOKEN"].encode()):
+    if not auth.run_check(attempt, None, "setup_token_invalid", lambda: hmac.compare_digest(
+            form.get("setup_token", "").encode(), current_app.config["SETUP_TOKEN"].encode())):
         auth.end_attempt(attempt, None, False, "setup_token_invalid")
         return render_template("setup.html", error="Setup token is incorrect."), 403
     auth.end_attempt(attempt, None, True)
@@ -121,7 +121,8 @@ def login():
     if attempt.blocked:
         auth.blocked_attempt(attempt, user, password)
         return _blocked_response(attempt)
-    if not auth.check_password(user, password):      # slow check, no lock held
+    if not auth.run_check(attempt, user, "login_password_failed",
+                          lambda: auth.check_password(user, password)):   # slow check, no lock held
         auth.end_attempt(attempt, user, False, "login_password_failed")
         return render_template("login.html", error=GENERIC_FAIL), 401
 
@@ -141,7 +142,8 @@ def _second_factor(user, code: str, fail_reason: str):
         with atomic():
             auth.end_session()
         return None, _blocked_response(attempt)
-    method = auth.verify_second_factor(user, code)   # backup-code checks are slow: no lock held
+    method = auth.run_check(attempt, user, fail_reason,     # backup-code checks are slow: no lock held
+                            lambda: auth.verify_second_factor(user, code))
     if method is None:
         if auth.end_attempt(attempt, user, False, fail_reason):
             with atomic():

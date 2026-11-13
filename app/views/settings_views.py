@@ -24,7 +24,9 @@ def password():
         with atomic():
             auth.end_session()
         return redirect(url_for("auth.login"))
-    if not auth.check_password(user, request.form.get("current_password", "")):
+    current = request.form.get("current_password", "")
+    if not auth.run_check(attempt, user, "password_change_wrong_current",
+                          lambda: auth.check_password(user, current)):
         if auth.end_attempt(attempt, user, False, "password_change_wrong_current"):
             with atomic():
                 auth.end_session()

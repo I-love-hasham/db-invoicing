@@ -6,6 +6,7 @@ against the official RFC 6238 test vectors in tests/test_totp.py.
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -14,6 +15,7 @@ from urllib.parse import quote
 PERIOD = 30
 DIGITS = 6
 ISSUER = "DB IT Invoicing"
+_CODE_RE = re.compile(r"[0-9]{%d}" % DIGITS)
 
 
 def _now() -> float:  # separate function so tests can control the clock
@@ -47,7 +49,8 @@ def verify(secret_b32: str, code: str, last_step: int, window: int = 1) -> int |
     Accepts the current step +/- `window` (clock drift) but never a step at or
     before `last_step`, so a code can't be used twice.
     """
-    if not (isinstance(code, str) and len(code) == DIGITS and code.isdigit()):
+    # ASCII 0-9 only: str.isdigit() would also accept e.g. Arabic-Indic digits
+    if not (isinstance(code, str) and _CODE_RE.fullmatch(code)):
         return None
     now = current_step()
     matched = None

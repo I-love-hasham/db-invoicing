@@ -50,6 +50,7 @@ def healthz():
 
 @bp.route("/")
 def dashboard():
+    auth.sweep_rate_limits()
     vulns = vulnerability_report()
     chain_ok, _, _ = audit.verify_chain()
     return render_template(

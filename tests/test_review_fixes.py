@@ -298,3 +298,52 @@ def test_NF_password_like_username_not_logged(client, app, clock):
     with app.app_context():
         dump = " ".join(str(tuple(r)) for r in get_audit_db().execute("SELECT * FROM audit_log"))
     assert "Correct.Horse-Battery9" not in dump
+
+
+# ---------------------------------------------------------------- third review round
+
+def test_R1_unicode_digits_cannot_lock_account_forever(client, app, clock):
+    import time
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    do_setup(client, app, clock)
+    _signed_out(client)
+    for _ in range(5):
+        c, token = _password_stage_client(app)
+        r = c.post("/login/2fa", data={"csrf_token": token, "code": "١٢٣٤٥٦"})
+        assert r.status_code == 401            # treated as a wrong code, not a crash
+        clock.advance()
+    with app.app_context():
+        assert get_db().execute("SELECT locked_until FROM users").fetchone()[0] is not None  # normal lock
+        assert get_audit_db().execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = '2fa_failed'").fetchone()[0] == 5
+        get_db().execute("UPDATE users SET locked_until = ? WHERE locked_until IS NOT NULL", (time.time() - 1,))
+        get_db().execute("DELETE FROM login_failures")
+    assert do_login(client, app, clock).status_code == 302   # lock expired normally
+
+
+def test_R1_leaked_reservations_become_an_expiring_lock(client, app, clock):
+    do_setup(client, app, clock)
+    _signed_out(client)
+    with app.app_context():
+        get_db().execute("UPDATE users SET failed_count = 5, locked_until = NULL")   # 5 crashed requests
+    assert do_login(client, app, clock).status_code == 401
+    with app.app_context():
+        u = get_db().execute("SELECT failed_count, locked_until FROM users").fetchone()
+        kinds = [r[0] for r in get_db().execute("SELECT kind FROM security_alerts")]
+    assert u["locked_until"] is not None and u["failed_count"] == 0 and "lockout" in kinds
+
+
+def test_R2_skipped_counts_are_summarized(client, app, clock, monkeypatch):
+    import time
+    for _ in range(30):
+        client.post("/login", data={"csrf_token": "bogus"})
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 16 * 60)
+    with app.test_request_context("/"):
+        from flask import g
+        g.ip, g.ua, g.user = "127.0.0.1", "pytest", None
+        from app import auth
+        auth.sweep_rate_limits()
+        rows = get_audit_db().execute(
+            "SELECT details FROM audit_log WHERE action = 'csrf_rejected_summary'").fetchall()
+    assert rows and '"repeats_not_logged": 29' in rows[0][0]

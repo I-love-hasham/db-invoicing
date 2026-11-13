@@ -87,8 +87,13 @@ def begin_attempt(user) -> Attempt:
         if user is None:
             return Attempt("ok", 0, row_id)
         row = db.execute("SELECT failed_count, locked_until FROM users WHERE id = ?", (user["id"],)).fetchone()
-        if (row["locked_until"] and row["locked_until"] > now) or row["failed_count"] >= LOCK_THRESHOLD:
+        if row["locked_until"] and row["locked_until"] > now:
             return Attempt("locked", 0, row_id)   # still counts toward the IP limit
+        if row["failed_count"] >= LOCK_THRESHOLD:
+            # 5 attempts reserved but never closed (e.g. a crashed request): turn it into
+            # a normal 15-minute lock so it always expires, and alert.
+            _lock(user, row["failed_count"], now)
+            return Attempt("locked", 0, row_id)
         count = db.execute("UPDATE users SET failed_count = failed_count + 1 WHERE id = ? RETURNING failed_count",
                            (user["id"],)).fetchone()["failed_count"]
         return Attempt("ok", count, row_id)
@@ -109,18 +114,35 @@ def end_attempt(attempt: Attempt, user, success: bool, reason: str | None = None
         if user is None:
             return False
         if attempt.count >= LOCK_THRESHOLD:
-            db.execute("UPDATE users SET failed_count = 0, locked_until = ? WHERE id = ?",
-                       (time.time() + LOCK_SECONDS, user["id"]))
-            db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
-            audit.log("account_locked", "auth", outcome="failure", username=name,
-                      details={"minutes": LOCK_SECONDS // 60, "failed_attempts": attempt.count})
-            audit.raise_alert("lockout", f"Account '{name}' was locked for 15 minutes after "
-                                         f"{attempt.count} failed sign-in attempts (last from {g.ip}).")
+            _lock(user, attempt.count, time.time())
             return True
         if attempt.count == ALERT_THRESHOLD:
             audit.raise_alert("failed_logins", f"{attempt.count} failed sign-in attempts in a row for "
                                                f"'{name}' (last from {g.ip}).")
         return False
+
+
+def _lock(user, failed: int, now: float) -> None:
+    db = get_db()
+    db.execute("UPDATE users SET failed_count = 0, locked_until = ? WHERE id = ?", (now + LOCK_SECONDS, user["id"]))
+    db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+    audit.log("account_locked", "auth", outcome="failure", username=user["username"],
+              details={"minutes": LOCK_SECONDS // 60, "failed_attempts": failed})
+    audit.raise_alert("lockout", f"Account '{user['username']}' was locked for 15 minutes after "
+                                 f"{failed} failed sign-in attempts (last from {g.ip}).")
+
+
+def run_check(attempt: Attempt, user, reason: str, check):
+    """Run a password/2FA check; if it crashes, the reserved attempt is closed
+    as a failure instead of leaking."""
+    try:
+        return check()
+    except Exception:
+        try:
+            end_attempt(attempt, user, False, reason + "_error")
+        except Exception:
+            pass
+        raise
 
 
 def _ip_alerts() -> None:
@@ -173,6 +195,32 @@ def log_rate_limited(action: str, category: str, **kwargs) -> None:
         audit.log(action, category, details=details or None, **kwargs)
         db.execute("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET"
                    " value = excluded.value", (key, f"{now}|0"))
+    sweep_rate_limits()
+
+
+def sweep_rate_limits() -> None:
+    """Write a summary for finished windows that skipped entries, then prune old keys.
+    Runs on every rate-limited event and whenever the dashboard loads."""
+    now = time.time()
+    cutoff_sql = "CAST(substr(value, 1, instr(value || '|', '|') - 1) AS REAL)"
+    pending = get_db().execute(   # lock-free check first: usually there's nothing to do
+        f"SELECT EXISTS (SELECT 1 FROM app_state WHERE key LIKE 'rl:%' AND value NOT LIKE '%|0'"
+        f" AND {cutoff_sql} <= ?) OR EXISTS (SELECT 1 FROM app_state WHERE (key LIKE 'rl:%'"
+        f" OR key LIKE 'alert:%') AND {cutoff_sql} < ?)", (now - IP_WINDOW, now - 86400)).fetchone()[0]
+    if not pending:
+        return
+    with atomic() as db:
+        for row in db.execute("SELECT key, value FROM app_state WHERE key LIKE 'rl:%'").fetchall():
+            start, _, suppressed = row["value"].partition("|")
+            try:
+                start_f, n = float(start), int(suppressed or 0)
+            except ValueError:
+                continue
+            if n and now - start_f >= IP_WINDOW:
+                _, action, ip = row["key"].split(":", 2)
+                audit.log(action + "_summary", "security", outcome="failure",
+                          details={"ip": ip, "repeats_not_logged": n, "window_minutes": IP_WINDOW // 60})
+                db.execute("UPDATE app_state SET value = ? WHERE key = ?", (f"{start_f}|0", row["key"]))
         db.execute("DELETE FROM app_state WHERE (key LIKE 'rl:%' OR key LIKE 'alert:%')"
                    " AND CAST(substr(value, 1, instr(value || '|', '|') - 1) AS REAL) < ?", (now - 86400,))
 
@@ -188,6 +236,8 @@ def alert_once(kind: str, message: str) -> None:
         audit.raise_alert(kind, message)
         db.execute("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET"
                    " value = excluded.value", (key, f"{now}|0"))
+        db.execute("DELETE FROM app_state WHERE key LIKE 'alert:%'"
+                   " AND CAST(substr(value, 1, instr(value || '|', '|') - 1) AS REAL) < ?", (now - 86400,))
 
 
 # ---------------------------------------------------------------- 2FA
@@ -246,9 +296,9 @@ def backup_codes_left(user_id: int) -> int:
 def verify_second_factor(user, code: str) -> str | None:
     """Returns 'totp' or 'backup_code' on success, None on failure."""
     code = (code or "").strip().replace(" ", "")
-    if code.isdigit() and len(code) == totp.DIGITS:
+    if re.fullmatch(r"[0-9]{%d}" % totp.DIGITS, code):
         return "totp" if check_totp(user, code) else None
-    if use_backup_code(user, code):
+    if re.fullmatch(r"[A-Za-z0-9-]{10,11}", code) and use_backup_code(user, code):
         return "backup_code"
     return None
 
@@ -317,8 +367,9 @@ def load_session() -> None:
     elif row["stage"] == "enroll" and now - row["created_at"] > ENROLL_STAGE_TIMEOUT:
         reason = "setup_not_completed"
     if reason:
-        db.execute("DELETE FROM sessions WHERE token_hash = ?", (row["token_hash"],))
-        audit.log("session_expired", "auth", username=row["username"], details={"reason": reason})
+        with atomic():
+            db.execute("DELETE FROM sessions WHERE token_hash = ?", (row["token_hash"],))
+            audit.log("session_expired", "auth", username=row["username"], details={"reason": reason})
         g.clear_cookie = True
         return
     if now - row["last_seen"] > 60:

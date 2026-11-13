@@ -115,9 +115,10 @@ def _save_checkpoint(count: int, entry_hash: str) -> None:
 
 
 def _read_checkpoint():
-    row = get_db().execute("SELECT value FROM app_state WHERE key = 'audit_checkpoint'").fetchone()
-    has_users = get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
-    return (row["value"] if row else None), has_users
+    row = get_db().execute(
+        "SELECT (SELECT value FROM app_state WHERE key = 'audit_checkpoint') AS value,"
+        " EXISTS (SELECT 1 FROM users) AS has_users").fetchone()
+    return row["value"], bool(row["has_users"])
 
 
 def _check_checkpoint(checkpoint: tuple, entries: list) -> str | None:
