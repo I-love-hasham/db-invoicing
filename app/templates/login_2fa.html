@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Two-factor check{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Two-factor check</h1>
+  <p class="muted">Enter the 6-digit code from Microsoft Authenticator.</p>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="code">Authenticator code (or a backup code)</label>
+    <input type="text" id="code" name="code" maxlength="11" required autofocus autocomplete="one-time-code">
+    <button type="submit">Verify</button>
+  </form>
+</div>
+{% endblock %}

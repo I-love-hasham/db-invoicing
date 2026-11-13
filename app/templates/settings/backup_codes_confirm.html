@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}New backup codes{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Generate new backup codes</h1>
+  <p>You have {{ backups_left }} unused codes. Generating new ones makes <strong>all</strong> old codes stop working.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Generate new codes</button>
+  </form>
+</div>
+{% endblock %}

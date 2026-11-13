@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<h1>Audit log</h1>
+<form method="get" class="card filters">
+  <div><label for="date_from">From</label><input type="date" id="date_from" name="date_from" value="{{ f.date_from }}"></div>
+  <div><label for="date_to">To</label><input type="date" id="date_to" name="date_to" value="{{ f.date_to }}"></div>
+  <div><label for="category">Type</label><select id="category" name="category">
+    <option value="">All</option>{% for c in categories %}<option value="{{ c }}" {% if f.category == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></div>
+  <div><label for="outcome">Result</label><select id="outcome" name="outcome">
+    <option value="">All</option>
+    <option value="success" {% if f.outcome == 'success' %}selected{% endif %}>success</option>
+    <option value="failure" {% if f.outcome == 'failure' %}selected{% endif %}>failure</option></select></div>
+  <div><label for="q">Search (action, client, IP…)</label><input type="text" id="q" name="q" value="{{ f.q }}"></div>
+  <div><button type="submit">Filter</button>
+    <a class="button" href="{{ url_for('audit.export_csv', **f) }}">Export CSV</a></div>
+</form>
+<p class="muted">{{ total }} entries · dates are UTC days · times shown in local time</p>
+<table>
+  <tr><th>#</th><th>Time</th><th>User</th><th>IP / device</th><th>Type</th><th>Action</th><th>Target</th><th>Result</th><th>Details</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.id }}</td><td>{{ r.ts | localtime }}</td><td>{{ r.username or '' }}</td>
+    <td>{{ r.ip or '' }}<div class="muted">{{ (r.user_agent or '')[:60] }}</div></td>
+    <td>{{ r.category }}</td><td>{{ r.action }}</td><td>{{ r.target or '' }}</td>
+    <td>{% if r.outcome == 'failure' %}<span class="bad">failure</span>{% else %}success{% endif %}</td>
+    <td class="details">{{ r.details if r.details != '{}' else '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="pager">
+  {% if page > 1 %}<a href="{{ url_for('audit.index', page=page-1, **f) }}">← Newer</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('audit.index', page=page+1, **f) }}">Older →</a>{% endif %}
+</div>
+{% endblock %}

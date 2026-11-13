@@ -1,0 +1,30 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: db-invoicing:local
+    container_name: db-invoicing
+    env_file: .env
+    # Published on localhost ONLY. cloudflared on the host connects here;
+    # the app is never reachable from the LAN or internet directly.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 512m
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

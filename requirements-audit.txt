@@ -1,0 +1,2 @@
+# Only used at build time / in CI to scan requirements.txt. Not shipped in the app.
+pip-audit==2.9.0

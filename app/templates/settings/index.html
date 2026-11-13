@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<div class="card">
+  <h2>Account security</h2>
+  <p class="muted">Each of these asks for a fresh 2FA code, is written to the audit log and raises a security alert.</p>
+  <p><a href="{{ url_for('settings.password') }}">Change password</a></p>
+  <p><a href="{{ url_for('settings.authenticator') }}">Move authenticator to a new phone</a></p>
+  <p><a href="{{ url_for('settings.backup_codes') }}">Generate new backup codes</a> <span class="muted">({{ backups_left }} unused left)</span></p>
+</div>
+<div class="card">
+  <h2>Coming next</h2>
+  <p class="muted">Email copy (CC/BCC), Google Drive, Microsoft 365 and Claude API settings are added with those features.</p>
+</div>
+{% endblock %}

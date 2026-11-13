@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}First-time setup{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>First-time setup</h1>
+  <p class="muted">Create the admin account. You'll need the SETUP_TOKEN from the server's .env file.</p>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="setup_token">Setup token</label>
+    <input type="password" id="setup_token" name="setup_token" required>
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" value="{{ username or '' }}" required maxlength="32" autocomplete="username">
+    <label for="password">Password (12+ characters)</label>
+    <input type="password" id="password" name="password" required minlength="12" maxlength="128" autocomplete="new-password">
+    <label for="password_confirm">Confirm password</label>
+    <input type="password" id="password_confirm" name="password_confirm" required autocomplete="new-password">
+    <button type="submit">Continue to 2FA setup</button>
+  </form>
+</div>
+{% endblock %}
