@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Set up 2FA{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Set up two-factor sign-in</h1>
+  <ol>
+    <li>Open Microsoft Authenticator → <strong>+</strong> → <strong>Other account</strong>.</li>
+    <li>Scan this QR code{% if not qr %} (QR not available — use “Enter code manually”){% endif %}.</li>
+  </ol>
+  {% if qr %}<img class="qr" src="{{ qr }}" alt="QR code for the authenticator app">{% endif %}
+  <p class="muted">Or enter this key manually:</p>
+  <div class="secret">{{ secret }}</div>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="code">6-digit code from the app</label>
+    <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autofocus>
+    <button type="submit">Confirm</button>
+  </form>
+</div>
+{% endblock %}

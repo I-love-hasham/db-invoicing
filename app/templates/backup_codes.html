@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Backup codes{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Your backup codes</h1>
+  <div class="notice">Save these now — they are shown <strong>only once</strong>. Each code works one time,
+  if you lose your phone. Store them in your password manager, not on this server.</div>
+  <div class="codes">{% for c in codes %}<div>{{ c }}</div>{% endfor %}</div>
+  {% if not first_time %}<p class="muted">Your previous backup codes no longer work.</p>{% endif %}
+  <a class="button" href="{{ url_for('main.dashboard') }}">I've saved them — continue</a>
+</div>
+{% endblock %}

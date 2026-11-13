@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+data
+backups
+tests
+scripts
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+**/__pycache__
+.pytest_cache
+.venv
+README.md

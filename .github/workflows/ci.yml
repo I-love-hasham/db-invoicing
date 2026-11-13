@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1"   # weekly, Monday 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned to full commit SHAs, not tags.
+# (trivy-action's tags were hijacked in March 2026 — CVE-2026-33634.)
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install pinned dependencies
+        run: pip install -r requirements-dev.txt -r requirements-audit.txt
+      - name: Tests
+        run: python -m pytest -q
+      - name: pip-audit (Python dependency vulnerabilities)
+        run: pip-audit -r requirements.txt --progress-spinner off
+
+  image-scan:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t db-invoicing:ci .
+      - name: Trivy scan (fails on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: db-invoicing:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          version: v0.69.3   # pinned Trivy release (known-good per GHSA-69fq-xp46-6x23)
