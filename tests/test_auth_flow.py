@@ -75,7 +75,7 @@ def test_lockout_after_five_failures(client, app, clock):
         r = do_login(client, app, clock, password="wrong-password-123")
     assert r.status_code == 401 and b"locked" in r.data
     r = do_login(client, app, clock)                           # right password, still locked
-    assert r.status_code == 403
+    assert r.status_code == 401 and client.get("/").status_code == 302
     with app.app_context():
         kinds = [r["kind"] for r in get_db().execute("SELECT kind FROM security_alerts")]
     assert "failed_logins" in kinds and "lockout" in kinds

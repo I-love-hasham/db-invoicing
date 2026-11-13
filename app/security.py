@@ -2,12 +2,14 @@
 import hmac
 import ipaddress
 import secrets
+import time
 from urllib.parse import urlsplit
 
 from flask import abort, current_app, g, redirect, request, url_for
 from itsdangerous import BadSignature, URLSafeSerializer
 
 from . import audit, auth
+from .db import get_db
 
 # Everything not listed here requires a fully signed-in session (password + 2FA).
 PUBLIC_ENDPOINTS = {"auth.login", "auth.setup", "main.healthz", "static"}
@@ -72,7 +74,12 @@ def _before_request():
     _load_csrf_token()
 
     if request.method not in SAFE_METHODS and not _csrf_ok():
-        audit.log("csrf_rejected", "security", outcome="failure", target=request.path)
+        # Signed-out senders can't flood the audit log: they count toward the
+        # per-IP limit, and once throttled their rejections aren't logged.
+        if g.session or not auth.ip_throttled(g.ip):
+            audit.log("csrf_rejected", "security", outcome="failure", target=request.path)
+        if not g.session:
+            get_db().execute("INSERT INTO login_failures (ip, ts) VALUES (?, ?)", (g.ip, time.time()))
         abort(400)
 
     if endpoint is None or endpoint in PUBLIC_ENDPOINTS:

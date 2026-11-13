@@ -11,12 +11,12 @@ the full rules are in the project spec (`DB_Invoicing_App_Spec.md`).
 | Container | Non-root user (uid 10001), read-only filesystem, all Linux capabilities dropped, no-new-privileges, log rotation (5 × 10 MB). |
 | Secrets | Only in `.env` (excluded from git and the image). TOTP secret encrypted at rest (Fernet). |
 | Sign-in | scrypt-hashed password (12+ chars), then mandatory TOTP (Microsoft Authenticator). 10 one-time backup codes, stored hashed. |
-| Lockout | 5 failed attempts → locked 15 min. Alert at 3 failures and on lockout. Also 20 failures / 15 min per IP. |
+| Lockout | 5 failed attempts → locked 15 min (exact even under parallel requests: each request runs in one serialized database transaction). Alert at 3 failures, on lockout, and when one IP hits 3 or 20 failures. |
 | Sessions | Server-side; cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, `__Host-` prefixed. 30-min idle / 12-h max. New token at every sign-in. |
 | Re-check 2FA | Changing the password, moving the authenticator or regenerating backup codes needs a 2FA code from the last 5 minutes. |
 | CSRF | Token on every form + Origin check. |
 | Headers | Strict CSP, no framing, no referrer, HSTS, `no-store`. |
-| Audit log | Separate database; append-only (DB triggers) and HMAC hash-chained with a signed head, so edits, deletions and truncation are all detected. Search, filters, CSV export. Secrets are redacted before anything is written. |
+| Audit log | Separate database; append-only (DB triggers) and HMAC hash-chained with a signed head. Edits, removed entries, a deleted log or a restored older copy are detected (a checkpoint in the main database remembers the newest entry). Every change and its audit entry succeed or fail together. Search, filters, CSV export. Secrets are redacted before anything is written. Limit: someone with full control of the server and the .env keys could rewrite both databases; sending the signed checkpoint off-server (daily email) comes with the Microsoft 365 step. |
 | Alerts | Red dashboard banner until acknowledged: new IP/device, 3+ failed sign-ins, lockout, password/2FA changes, backup-code use. (Emailing them from `billing@` comes with the Microsoft Graph step.) |
 | Updates | Dependabot (pip, Docker, Actions). CI on every change + weekly: tests, pip-audit, Trivy image scan. Security Status page in the app. |
 

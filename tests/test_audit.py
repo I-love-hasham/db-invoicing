@@ -54,4 +54,4 @@ def test_truncation_is_detected(app):
         conn.execute("DROP TRIGGER audit_log_no_delete")
         conn.execute("DELETE FROM audit_log WHERE id = 3")
         ok, _, msg = audit.verify_chain()
-        assert not ok and "missing" in msg
+        assert not ok and "cut short" in msg

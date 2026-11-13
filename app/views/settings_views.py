@@ -62,7 +62,10 @@ def authenticator():
     """Move 2FA to a new phone: scan a new secret, confirm a code, then the old one stops working."""
     db = get_db()
     token_hash = g.session["token_hash"]
-    if request.method == "GET" or not g.session.get("pending_totp_enc"):
+    if not g.session.get("pending_totp_enc"):
+        if request.method == "POST":
+            return redirect(url_for("settings.authenticator"))
+        # Create the new secret once; reloading the page shows the same one.
         secret = totp.new_secret()
         db.execute("UPDATE sessions SET pending_totp_enc = ? WHERE token_hash = ?",
                    (crypto.encrypt(secret), token_hash))
@@ -70,6 +73,9 @@ def authenticator():
                                qr=totp.qr_data_uri(totp.provisioning_uri(secret, g.user["username"])))
 
     secret = crypto.decrypt(g.session["pending_totp_enc"])
+    if request.method == "GET":
+        return render_template("settings/authenticator.html", secret=secret,
+                               qr=totp.qr_data_uri(totp.provisioning_uri(secret, g.user["username"])))
     step = totp.verify(secret, request.form.get("code", "").strip(), last_step=0)
     if step is None:
         audit.log("authenticator_change_failed", "settings", outcome="failure")

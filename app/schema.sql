@@ -60,3 +60,10 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     acknowledged_by  TEXT,
     emailed_at       TEXT   -- filled once Microsoft Graph sending is built
 );
+
+-- Small key/value store. 'audit_checkpoint' = highest audit entry ever written
+-- (count|hash|mac), so deleting the audit DB or restoring an older copy is detected.
+CREATE TABLE IF NOT EXISTS app_state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);

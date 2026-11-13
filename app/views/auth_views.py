@@ -8,8 +8,11 @@ from ..db import get_db
 
 bp = Blueprint("auth", __name__)
 
-GENERIC_FAIL = "Invalid username or password."
-LOCKED_MSG = "Too many failed attempts. The account is locked for 15 minutes."
+# One message for wrong password AND locked account, so the page doesn't reveal
+# which usernames exist. The real reason is in the audit log (and an alert).
+GENERIC_FAIL = ("Sign-in failed. Check your username and password. After 5 failed "
+                "attempts the account is locked for 15 minutes.")
+LOCKED_MSG = GENERIC_FAIL
 THROTTLED_MSG = "Too many failed attempts from your network. Try again later."
 
 
@@ -107,11 +110,10 @@ def login():
                             (username,)).fetchone()
     if auth.is_locked(user):
         audit.log("login_blocked_locked", "auth", outcome="failure", username=user["username"])
-        return render_template("login.html", error=LOCKED_MSG, username=username), 403
+        return render_template("login.html", error=GENERIC_FAIL), 401
     if not auth.check_password(user, password):
         locked = auth.register_failure(user, "login_password_failed", attempted_username=username)
-        return render_template("login.html", error=LOCKED_MSG if locked else GENERIC_FAIL,
-                               username=username), 401
+        return render_template("login.html", error=GENERIC_FAIL), 401
 
     g.user = {"id": user["id"], "username": user["username"]}
     audit.log("login_password_ok", "auth")
@@ -129,14 +131,14 @@ def login_2fa():
     user = auth.get_user(g.user["id"])
     if auth.is_locked(user):
         auth.end_session()
-        return render_template("login.html", error=LOCKED_MSG), 403
+        return render_template("login.html", error=LOCKED_MSG), 401
 
     method = auth.verify_second_factor(user, request.form.get("code", ""))
     if method is None:
         locked = auth.register_failure(user, "2fa_failed")
         if locked:
             auth.end_session()
-            return render_template("login.html", error=LOCKED_MSG), 403
+            return render_template("login.html", error=LOCKED_MSG), 401
         return render_template("login_2fa.html", error="That code didn't work."), 401
 
     auth.reset_failures(user["id"])

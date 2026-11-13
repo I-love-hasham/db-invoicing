@@ -100,6 +100,41 @@ def log(action: str, category: str, outcome: str = "success", target: str | None
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+    _save_checkpoint(count, entry_hash)
+
+
+def _save_checkpoint(count: int, entry_hash: str) -> None:
+    """Remember the newest entry in app.db (commits with the request)."""
+    value = f"{count}|{entry_hash}|{_mac(f'checkpoint|{count}|{entry_hash}')}"
+    get_db().execute(
+        "INSERT INTO app_state (key, value) VALUES ('audit_checkpoint', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        " WHERE CAST(substr(app_state.value, 1, instr(app_state.value, '|') - 1) AS INTEGER) < ?",
+        (value, count),
+    )
+
+
+def _check_checkpoint(entries: list) -> str | None:
+    """Problem text if the log is shorter than, or doesn't contain, the highest entry ever written."""
+    row = get_db().execute("SELECT value FROM app_state WHERE key = 'audit_checkpoint'").fetchone()
+    if row is None:
+        has_users = get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        if has_users and not entries:
+            return "The audit log is empty but the app has accounts — it was deleted or replaced."
+        return None
+    try:
+        count_s, entry_hash, mac = row["value"].split("|")
+        count = int(count_s)
+    except ValueError:
+        return "The audit checkpoint is unreadable."
+    if not hmac.compare_digest(mac, _mac(f"checkpoint|{count}|{entry_hash}")):
+        return "The audit checkpoint was altered."
+    if len(entries) < count:
+        return (f"The audit log has {len(entries)} entries but {count} were written — "
+                "it was deleted, cut short, or restored from an older copy.")
+    if entries[count - 1] != entry_hash:
+        return f"Audit entry #{count} doesn't match what was originally written."
+    return None
 
 
 def verify_chain() -> tuple[bool, int, str]:
@@ -107,14 +142,19 @@ def verify_chain() -> tuple[bool, int, str]:
     conn = get_audit_db()
     prev = GENESIS
     count = 0
+    hashes = []
     for row in conn.execute("SELECT * FROM audit_log ORDER BY id"):
         count += 1
+        hashes.append(row["entry_hash"])
         entry = {f: row[f] for f in FIELDS}
         if row["prev_hash"] != prev:
             return False, count, f"Entry #{row['id']} does not link to the entry before it."
         if not hmac.compare_digest(row["entry_hash"], _mac(prev + "|" + _payload(entry))):
             return False, count, f"Entry #{row['id']} was altered."
         prev = row["entry_hash"]
+    problem = _check_checkpoint(hashes)
+    if problem:
+        return False, count, problem
     head = conn.execute("SELECT * FROM audit_head WHERE id = 1").fetchone()
     if head is None:
         if count == 0:

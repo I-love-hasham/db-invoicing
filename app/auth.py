@@ -73,10 +73,18 @@ def register_failure(user, reason: str, attempted_username: str | None = None) -
     now = time.time()
     db.execute("INSERT INTO login_failures (ip, ts) VALUES (?, ?)", (g.ip, now))
     db.execute("DELETE FROM login_failures WHERE ts < ?", (now - 86400,))
-    name = user["username"] if user else attempted_username
+    name = user["username"] if user else loggable_username(attempted_username)
     audit.log(reason, "auth", outcome="failure", username=name,
-              details={"attempted_username": attempted_username} if not user else None)
+              details={"unknown_username": True} if not user else None)
+    ip_failures = db.execute("SELECT COUNT(*) AS n FROM login_failures WHERE ip = ? AND ts > ?",
+                             (g.ip, now - IP_WINDOW)).fetchone()["n"]
+    if ip_failures == IP_MAX_FAILURES:
+        audit.raise_alert("ip_throttled", f"{ip_failures} failed sign-in attempts from {g.ip} in 15 minutes. "
+                                          "That address is now blocked from signing in for a while.")
     if not user:
+        if ip_failures == ALERT_THRESHOLD:
+            audit.raise_alert("failed_logins", f"{ip_failures} failed sign-in attempts from {g.ip} "
+                                               "(unknown username or bad setup token).")
         return False
     count = user["failed_count"] + 1
     if count >= LOCK_THRESHOLD:
@@ -110,8 +118,10 @@ def check_totp(user, code: str, secret: str | None = None) -> bool:
     step = totp.verify(secret or user_totp_secret(user), code, user["totp_last_step"])
     if step is None:
         return False
-    get_db().execute("UPDATE users SET totp_last_step = ? WHERE id = ?", (step, user["id"]))
-    return True
+    # Conditional update: only one request can ever claim a given time step.
+    cur = get_db().execute("UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?",
+                           (step, user["id"], step))
+    return cur.rowcount == 1
 
 
 def _normalize_backup(code: str) -> str:
@@ -139,9 +149,9 @@ def use_backup_code(user, code: str) -> bool:
     for row in db.execute("SELECT id, code_hash FROM backup_codes WHERE user_id = ? AND used_at IS NULL",
                           (user["id"],)).fetchall():
         if check_password_hash(row["code_hash"], norm):
-            db.execute("UPDATE backup_codes SET used_at = ? WHERE id = ? AND used_at IS NULL",
-                       (audit.utcnow_iso(), row["id"]))
-            return True
+            cur = db.execute("UPDATE backup_codes SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                             (audit.utcnow_iso(), row["id"]))
+            return cur.rowcount == 1
     return False
 
 
@@ -259,10 +269,21 @@ def fresh_2fa_required(view):
     return wrapper
 
 
+_SAFE_PATH = re.compile(r"^/[A-Za-z0-9_\-./]*$")
+
+
 def safe_next(target: str | None, default: str) -> str:
-    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+    """Only plain local paths like /settings/password; anything else goes to the default."""
+    if target and _SAFE_PATH.match(target) and not target.startswith("//") and len(target) <= 200:
         return target
     return default
+
+
+def loggable_username(name: str | None) -> str | None:
+    """Never log free text from the username box: it might be a mistyped password."""
+    if name is None:
+        return None
+    return name if USERNAME_RE.match(name) else "[not a valid username]"
 
 
 # ---------------------------------------------------------------- devices

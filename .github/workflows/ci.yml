@@ -47,3 +47,4 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           format: table
+          version: v0.69.3   # pinned Trivy release (known-good per GHSA-69fq-xp46-6x23)

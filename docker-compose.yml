@@ -15,7 +15,7 @@ services:
       - ./data:/data
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev,size=16m
     cap_drop:
       - ALL
     security_opt:

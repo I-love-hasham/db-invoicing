@@ -1,5 +1,6 @@
+# Base image pinned by digest; Dependabot proposes digest updates as PRs.
 # ---- build: install pinned dependencies into a virtualenv, scan them ----
-FROM python:3.13-slim AS build
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY requirements.txt requirements-audit.txt /tmp/
 RUN python -m venv /venv \
@@ -13,7 +14,7 @@ RUN python -m venv /auditvenv \
  && date -u +%Y-%m-%dT%H:%M:%SZ > /security/scanned_at
 
 # ---- runtime ----
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 # Apply Debian security fixes newer than the base image; remove pip (not needed
 # at runtime, and its bundled libraries add attack surface and scanner findings).
 RUN apt-get update \
