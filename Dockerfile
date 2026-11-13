@@ -3,7 +3,8 @@ FROM python:3.13-slim AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY requirements.txt requirements-audit.txt /tmp/
 RUN python -m venv /venv \
- && /venv/bin/pip install -r /tmp/requirements.txt
+ && /venv/bin/pip install -r /tmp/requirements.txt \
+ && /venv/bin/pip uninstall -y pip
 # pip-audit runs in its own throwaway venv; its report is shown on the Security Status page.
 RUN python -m venv /auditvenv \
  && /auditvenv/bin/pip install -r /tmp/requirements-audit.txt \
@@ -13,9 +14,14 @@ RUN python -m venv /auditvenv \
 
 # ---- runtime ----
 FROM python:3.13-slim
+# Apply Debian security fixes newer than the base image; remove pip (not needed
+# at runtime, and its bundled libraries add attack surface and scanner findings).
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends tzdata \
  && rm -rf /var/lib/apt/lists/* \
+ && python -m pip uninstall -y pip \
+ && rm -rf /usr/local/lib/python3.13/ensurepip \
  && groupadd --system --gid 10001 app \
  && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
  && mkdir /data && chown app:app /data && chmod 700 /data
