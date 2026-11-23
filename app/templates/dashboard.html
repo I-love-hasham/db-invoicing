@@ -12,6 +12,31 @@
   {% else %}<span class="muted">No timer running.</span> <a href="{{ url_for('time.index') }}">Start one</a>{% endif %}
 </div>
 <div class="stats">
+  <div class="stat"><div class="label">Total owed</div><div class="value">{{ money.owed_cents | money }}</div>
+    <div class="muted">{{ money.owed_count }} unpaid invoice{{ '' if money.owed_count == 1 else 's' }}</div></div>
+  <div class="stat"><div class="label">Not yet due</div><div class="value">{{ money.outstanding_cents | money }}</div>
+    <div class="muted">{{ money.outstanding_count }} invoice{{ '' if money.outstanding_count == 1 else 's' }}</div></div>
+  <div class="stat"><div class="label">Overdue</div><div class="value">{% if money.overdue_count %}<span class="bad">{{ money.overdue_cents | money }}</span>{% else %}{{ money.overdue_cents | money }}{% endif %}</div>
+    <div class="muted">{{ money.overdue_count }} invoice{{ '' if money.overdue_count == 1 else 's' }}</div></div>
+</div>
+
+{% if follow_ups %}
+<div class="card" style="margin-top:18px">
+  <h2>Reminders ready</h2>
+  <table>
+    <tr><th>Invoice</th><th>Client</th><th>Total</th><th>Days late</th><th></th></tr>
+    {% for f in follow_ups %}
+    <tr><td><a href="{{ url_for('invoices.detail', invoice_id=f.invoice.id) }}">#{{ f.invoice.number }}</a></td>
+        <td>{{ f.invoice.client_snapshot | client_name }}</td><td>{{ f.invoice.total_cents | money }}</td>
+        <td><span class="bad">{{ f.days_late }}</span></td>
+        <td><a href="{{ url_for('invoices.follow_up', invoice_id=f.invoice.id, stage=f.stage) }}">Review {{ f.stage }}-day reminder</a></td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<h2>Security</h2>
+<div class="stats">
   <div class="stat"><div class="label">App version</div><div class="value">{{ version }}</div></div>
   <div class="stat"><div class="label">Open vulnerabilities</div>
     <div class="value">{% if not vulns.scanned %}<span class="muted">not scanned</span>{% elif vulns.vulns %}<span class="bad">{{ vulns.vulns|length }}</span>{% else %}<span class="ok">0</span>{% endif %}</div></div>

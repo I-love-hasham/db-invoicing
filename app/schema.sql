@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS invoices (
     pdf_sha256         TEXT,
     void_reason        TEXT,
     voided_at          TEXT,
-    paid_at            TEXT,
+    paid_at            TEXT,              -- date the payment arrived (YYYY-MM-DD)
+    paid_method        TEXT,              -- check / zelle / transfer / other (never account numbers)
     created_at         TEXT NOT NULL,
     updated_at         TEXT NOT NULL
 );
@@ -171,4 +172,15 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 CREATE TABLE IF NOT EXISTS app_settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------- follow-ups
+-- Reminder drafts at 7 and 14 days past due. Sent only when David clicks Send.
+CREATE TABLE IF NOT EXISTS follow_ups (
+    id          INTEGER PRIMARY KEY,
+    invoice_id  INTEGER NOT NULL REFERENCES invoices(id),
+    stage       INTEGER NOT NULL CHECK (stage IN (7, 14)),
+    drafted_at  TEXT NOT NULL,
+    sent_at     TEXT,
+    UNIQUE (invoice_id, stage)
 );

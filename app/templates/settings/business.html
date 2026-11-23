@@ -17,6 +17,8 @@
     <input type="text" id="email" name="email" value="{{ b.email }}" maxlength="254">
     <label for="footer">Invoice footer</label>
     <input type="text" id="footer" name="footer" value="{{ b.footer }}" maxlength="140">
+    <label for="signature">Name to sign reminder emails with</label>
+    <input type="text" id="signature" name="signature" value="{{ b.signature }}" required maxlength="60">
     <button type="submit">Save</button>
   </form>
 </div>

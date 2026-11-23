@@ -182,7 +182,7 @@ def detail(invoice_id: int):
     entries = get_db().execute(
         "SELECT t.*, p.name AS product_name FROM time_entries t JOIN products p ON p.id = t.product_id"
         " WHERE t.invoice_id = ? ORDER BY t.work_date, t.id", (invoice_id,)).fetchall()
-    return render_template("invoices/detail.html", inv=inv, vm=vm, entries=entries)
+    return render_template("invoices/detail.html", inv=inv, vm=vm, entries=entries, today=_today())
 
 
 @bp.route("/<int:invoice_id>/pdf")
@@ -265,7 +265,9 @@ def void(invoice_id: int):
                                entries=[], error=e.message), 400
     with atomic() as db:
         inv, _ = _get(invoice_id)
-        if inv["status"] == "void":
+        if inv["status"] != "unpaid":
+            # a paid invoice can't be voided (its time would become billable again);
+            # change it back to unpaid first — that needs a reason and raises an alert
             return redirect(url_for("invoices.detail", invoice_id=invoice_id))
         released = db.execute("UPDATE time_entries SET invoice_id = NULL WHERE invoice_id = ?", (invoice_id,)).rowcount
         now = audit.utcnow_iso()
@@ -278,3 +280,73 @@ def void(invoice_id: int):
                                             f"was voided by {g.user['username']} from {g.ip}. Reason: {reason}")
     _write_pdf(invoice_id, "invoice_pdf_regenerated")
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+
+
+# ---------------------------------------------------------------- payments
+
+@bp.route("/<int:invoice_id>/paid", methods=["POST"])
+def mark_paid(invoice_id: int):
+    from .. import payments
+    today = _today()
+    inv, lines = _get(invoice_id)
+    try:
+        paid_date = payments.valid_paid_date(request.form, inv["invoice_date"], today)
+        method = forms.choice(request.form, "method", "Payment method", tuple(payments.METHODS))
+    except forms.FormError as e:
+        return render_template("invoices/detail.html", inv=inv, vm=invoicing.view_model(inv, lines, today),
+                               entries=[], error=e.message), 400
+    with atomic() as db:
+        current, _ = _get(invoice_id)                 # re-read under the lock
+        if current["status"] != "unpaid":
+            return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+        db.execute("UPDATE invoices SET status = 'paid', paid_at = ?, paid_method = ?, updated_at = ? WHERE id = ?",
+                   (paid_date, method, audit.utcnow_iso(), invoice_id))
+        audit.log("invoice_marked_paid", "invoices", target=f"invoice:{current['number']}",
+                  client_id=current["client_id"],
+                  details={"before": {"status": "unpaid"},
+                           "after": {"status": "paid", "paid_date": paid_date, "method": payments.METHODS[method]},
+                           "total": forms.format_money(current["total_cents"])})
+    _write_pdf(invoice_id, "invoice_pdf_regenerated")
+    return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+
+
+@bp.route("/<int:invoice_id>/unpaid", methods=["POST"])
+def undo_paid(invoice_id: int):
+    """Correct a payment recorded by mistake. Needs a reason and raises an alert."""
+    try:
+        reason = forms.text(request.form, "reason", "Reason", 300, required=True)
+    except forms.FormError as e:
+        inv, lines = _get(invoice_id)
+        return render_template("invoices/detail.html", inv=inv, vm=invoicing.view_model(inv, lines, _today()),
+                               entries=[], error=e.message), 400
+    with atomic() as db:
+        current, _ = _get(invoice_id)
+        if current["status"] != "paid":
+            return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+        db.execute("UPDATE invoices SET status = 'unpaid', paid_at = NULL, paid_method = NULL, updated_at = ?"
+                   " WHERE id = ?", (audit.utcnow_iso(), invoice_id))
+        audit.log("invoice_payment_undone", "invoices", target=f"invoice:{current['number']}",
+                  client_id=current["client_id"],
+                  details={"before": {"status": "paid", "paid_date": current["paid_at"],
+                                      "method": current["paid_method"]},
+                           "after": {"status": "unpaid"}, "reason": reason})
+        audit.raise_alert("payment_undone", f"Invoice #{current['number']} was changed from Paid back to Unpaid by "
+                                            f"{g.user['username']} from {g.ip}. Reason: {reason}")
+    _write_pdf(invoice_id, "invoice_pdf_regenerated")
+    return redirect(url_for("invoices.detail", invoice_id=invoice_id))
+
+
+@bp.route("/<int:invoice_id>/follow-up/<int:stage>")
+def follow_up(invoice_id: int, stage: int):
+    from .. import business, payments
+    if stage not in payments.FOLLOW_UP_STAGES:
+        abort(404)
+    inv, _ = _get(invoice_id)
+    if inv["status"] != "unpaid":
+        abort(404)       # paid or void: no reminder (the future Send re-checks this under the lock)
+    row = get_db().execute("SELECT * FROM follow_ups WHERE invoice_id = ? AND stage = ?",
+                           (invoice_id, stage)).fetchone()
+    if row is None:
+        abort(404)
+    msg = payments.follow_up_text(inv, stage, business.get_details()["signature"])
+    return render_template("invoices/follow_up.html", inv=inv, stage=stage, msg=msg, follow_up=row)
