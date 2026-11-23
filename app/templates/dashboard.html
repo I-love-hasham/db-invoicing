@@ -6,6 +6,11 @@
 <div class="notice">Only {{ backups_left }} 2FA backup codes left.
   <a href="{{ url_for('settings.backup_codes') }}">Generate new ones</a>.</div>
 {% endif %}
+<div class="card timer {% if timer %}running{% endif %}">
+  {% if timer %}<strong>⏱ Timer running — {{ timer_elapsed }}</strong> · {{ timer.client_name }} · {{ timer.product_name }}
+    · <a href="{{ url_for('time.index') }}">open</a>
+  {% else %}<span class="muted">No timer running.</span> <a href="{{ url_for('time.index') }}">Start one</a>{% endif %}
+</div>
 <div class="stats">
   <div class="stat"><div class="label">App version</div><div class="value">{{ version }}</div></div>
   <div class="stat"><div class="label">Open vulnerabilities</div>

@@ -103,3 +103,26 @@ CREATE TABLE IF NOT EXISTS client_rates (
     updated_at  TEXT NOT NULL,
     PRIMARY KEY (client_id, product_id)
 );
+
+-- ---------------------------------------------------------------- time entries
+-- duration_seconds is NULL only while a timer is running. Entries are never
+-- hard-deleted (deleted_at), and once on an invoice (invoice_id) they are locked.
+CREATE TABLE IF NOT EXISTS time_entries (
+    id                INTEGER PRIMARY KEY,
+    client_id         INTEGER NOT NULL REFERENCES clients(id),
+    product_id        INTEGER NOT NULL REFERENCES products(id),
+    work_date         TEXT NOT NULL,                       -- YYYY-MM-DD, local time
+    started_at        TEXT,                                -- UTC, timer entries only
+    ended_at          TEXT,
+    duration_seconds  INTEGER CHECK (duration_seconds IS NULL OR duration_seconds BETWEEN 0 AND 86400),
+    notes             TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL CHECK (source IN ('timer', 'manual')),
+    invoice_id        INTEGER,
+    deleted_at        TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_time_client_date ON time_entries (client_id, work_date);
+-- At most one running timer, enforced by the database itself.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_running_timer ON time_entries (source)
+    WHERE source = 'timer' AND duration_seconds IS NULL AND deleted_at IS NULL;

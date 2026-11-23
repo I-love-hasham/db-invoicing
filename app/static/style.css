@@ -53,3 +53,5 @@ textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border
 textarea:focus { outline: 2px solid var(--gold); border-color: var(--gold); }
 button.link.dark { color: var(--forest); text-decoration: underline; font-size: 13px; }
 td input[type=text] { max-width: 140px; }
+.timer.running { border-left: 6px solid var(--gold); }
+button.secondary { background: #fff; color: var(--forest); border: 1px solid var(--forest); }

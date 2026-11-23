@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Time{% endblock %}
+{% block content %}
+<h1>Time</h1>
+
+<div class="card timer {% if timer %}running{% endif %}">
+  {% if timer %}
+  <h2>⏱ Timer running — {{ elapsed }}</h2>
+  <p><strong>{{ timer.client_name }}</strong> · {{ timer.product_name }} · started {{ timer.started_at | localtime }}</p>
+  <form method="post" action="{{ url_for('time.stop') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="notes">Notes (what you're working on)</label>
+    <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ timer.notes }}</textarea>
+    <button type="submit" formaction="{{ url_for('time.save_timer_notes') }}" class="secondary">Save notes</button>
+    <button type="submit" class="danger">Stop timer</button>
+  </form>
+  <p class="muted">Reload the page to update the running time. Notes are saved when you click Save or Stop.</p>
+  {% elif clients and products %}
+  <h2>Start timer</h2>
+  <form method="post" action="{{ url_for('time.start') }}" class="filters">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label for="client_id">Client</label><select id="client_id" name="client_id" required>
+      {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></div>
+    <div><label for="product_id">Product</label><select id="product_id" name="product_id" required>
+      {% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+    <div><label for="tnotes">Notes (optional)</label><input type="text" id="tnotes" name="notes" maxlength="2000"></div>
+    <div><button type="submit">▶ Start</button></div>
+  </form>
+  {% else %}
+  <p class="muted">Add at least one <a href="{{ url_for('clients.new') }}">client</a> and one
+    <a href="{{ url_for('products.new') }}">product</a> to start tracking time.</p>
+  {% endif %}
+</div>
+
+<form method="get" class="card filters">
+  <div><label for="from">From</label><input type="date" id="from" name="from" value="{{ f['from'] }}"></div>
+  <div><label for="to">To</label><input type="date" id="to" name="to" value="{{ f['to'] }}"></div>
+  <div><label for="client">Client</label><select id="client" name="client">
+    <option value="">All</option>{% for c in all_clients %}<option value="{{ c.id }}" {% if f.client == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
+  <div><button type="submit">Show</button> <a class="button" href="{{ url_for('time.new') }}">+ Add time</a></div>
+</form>
+
+<p><strong>Total: {{ total | hours }} hours</strong> <span class="muted">({{ entries|length }} entries)</span></p>
+<table>
+  <tr><th>Date</th><th>Client</th><th>Product</th><th>Hours</th><th>Notes</th><th></th></tr>
+  {% for e in entries %}
+  <tr>
+    <td>{{ e.work_date }}</td><td>{{ e.client_name }}</td><td>{{ e.product_name }}</td>
+    <td>{% if e.duration_seconds is none %}<span class="ok">running</span>{% else %}{{ e.duration_seconds | hours }}{% endif %}</td>
+    <td>{{ e.notes[:120] }}{% if e.notes|length > 120 %}…{% endif %}</td>
+    <td>{% if e.invoice_id %}<span class="muted">invoiced</span>{% elif e.duration_seconds is not none %}<a href="{{ url_for('time.edit', entry_id=e.id) }}">Edit</a>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No time in this period.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
