@@ -126,3 +126,49 @@ CREATE INDEX IF NOT EXISTS idx_time_client_date ON time_entries (client_id, work
 -- At most one running timer, enforced by the database itself.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_running_timer ON time_entries (source)
     WHERE source = 'timer' AND duration_seconds IS NULL AND deleted_at IS NULL;
+
+-- ---------------------------------------------------------------- invoices
+-- An invoice is a snapshot: client and business details are copied in when it's
+-- created, so editing a client later never changes an invoice already sent.
+-- Invoices are never deleted; "delete" = void (record kept, time released).
+CREATE TABLE IF NOT EXISTS invoices (
+    id                 INTEGER PRIMARY KEY,
+    number             INTEGER NOT NULL UNIQUE,
+    client_id          INTEGER NOT NULL REFERENCES clients(id),
+    status             TEXT NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid', 'paid', 'void')),
+    invoice_date       TEXT NOT NULL,
+    due_date           TEXT NOT NULL,
+    period_from        TEXT NOT NULL,
+    period_to          TEXT NOT NULL,
+    subtotal_cents     INTEGER NOT NULL,
+    total_cents        INTEGER NOT NULL,
+    notes              TEXT NOT NULL DEFAULT '',
+    client_snapshot    TEXT NOT NULL,     -- JSON: name, address, email, terms
+    business_snapshot  TEXT NOT NULL,     -- JSON: name, address, phone, email, footer
+    pdf_path           TEXT,              -- relative to DATA_DIR
+    pdf_sha256         TEXT,
+    void_reason        TEXT,
+    voided_at          TEXT,
+    paid_at            TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices (client_id, invoice_date);
+
+CREATE TABLE IF NOT EXISTS invoice_lines (
+    id            INTEGER PRIMARY KEY,
+    invoice_id    INTEGER NOT NULL REFERENCES invoices(id),
+    sort          INTEGER NOT NULL,
+    product_id    INTEGER NOT NULL REFERENCES products(id),
+    description   TEXT NOT NULL,
+    seconds       INTEGER NOT NULL,
+    hours         TEXT NOT NULL,          -- what the invoice shows, e.g. "43.32"
+    rate_cents    INTEGER NOT NULL,
+    amount_cents  INTEGER NOT NULL
+);
+
+-- Business details printed on invoices (one row per setting).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);

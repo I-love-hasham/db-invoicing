@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Business details{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Business details</h1>
+  <p class="muted">Printed on invoices you create from now on. Invoices already made keep the details they had.
+    Don't put bank account numbers here.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="name">Business name</label>
+    <input type="text" id="name" name="name" value="{{ b.name }}" required maxlength="100">
+    <label for="address">Address</label>
+    <textarea id="address" name="address" rows="3" maxlength="300">{{ b.address }}</textarea>
+    <label for="phone">Phone</label>
+    <input type="text" id="phone" name="phone" value="{{ b.phone }}" maxlength="40">
+    <label for="email">Email</label>
+    <input type="text" id="email" name="email" value="{{ b.email }}" maxlength="254">
+    <label for="footer">Invoice footer</label>
+    <input type="text" id="footer" name="footer" value="{{ b.footer }}" maxlength="140">
+    <button type="submit">Save</button>
+  </form>
+</div>
+{% endblock %}

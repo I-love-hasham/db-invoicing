@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Edit invoice{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Edit invoice #{{ inv.number }}</h1>
+  <p class="muted">Hours and amounts come from the time entries. To change them, void this invoice, fix the time, and create a new one.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="invoice_date">Invoice date (due date follows the client's terms)</label>
+    <input type="date" id="invoice_date" name="invoice_date" value="{{ inv.invoice_date }}" required>
+    <label for="notes">Notes on the invoice</label>
+    <textarea id="notes" name="notes" rows="3" maxlength="2000">{{ inv.notes }}</textarea>
+    <button type="submit">Save and regenerate PDF</button>
+  </form>
+  <p><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}">Cancel</a></p>
+</div>
+{% endblock %}

@@ -15,6 +15,7 @@ ERROR_TEXT = {
     403: "You don't have access to that.",
     404: "Page not found.",
     405: "That action isn't allowed here.",
+    409: "That file was changed outside the app. A security alert was raised.",
     413: "That upload is too large.",
     429: "Too many requests. Wait a moment and try again.",
     500: "Something went wrong. The error was recorded in the audit log.",
@@ -61,16 +62,17 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.jinja_env.filters["money_input"] = forms.cents_to_input
     app.jinja_env.filters["hours"] = forms.format_hours
 
-    from .views import (audit_views, auth_views, clients_views, main_views, products_views, settings_views,
-                        time_views)
-    for module in (auth_views, main_views, settings_views, audit_views, clients_views, products_views, time_views):
+    from .views import (audit_views, auth_views, clients_views, invoices_views, main_views, products_views,
+                        settings_views, time_views)
+    for module in (auth_views, main_views, settings_views, audit_views, clients_views, products_views, time_views,
+                   invoices_views):
         app.register_blueprint(module.bp)
 
     def _error(exc):
         code = getattr(exc, "code", 500) or 500
         return render_template("error.html", code=code, message=ERROR_TEXT.get(code, "Error.")), code
 
-    for code in (400, 403, 404, 405, 413, 429):
+    for code in (400, 403, 404, 405, 409, 413, 429):
         app.register_error_handler(code, _error)
 
     @app.errorhandler(500)

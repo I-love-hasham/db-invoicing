@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Invoices{% endblock %}
+{% block content %}
+<h1>Invoices</h1>
+<p><a class="button" href="{{ url_for('invoices.new') }}">+ New invoice</a></p>
+<table>
+  <tr><th>#</th><th>Client</th><th>Date</th><th>Service period</th><th>Total</th><th>Status</th></tr>
+  {% for i in invoices %}
+  <tr><td><a href="{{ url_for('invoices.detail', invoice_id=i.id) }}">{{ i.number }}</a></td>
+      <td>{{ i.client_name }}</td><td>{{ i.invoice_date }}</td><td>{{ i.period_from }} – {{ i.period_to }}</td>
+      <td>{{ i.total_cents | money }}</td>
+      <td>{% if i.shown_status in ('Overdue', 'Void') %}<span class="bad">{{ i.shown_status }}</span>{% else %}{{ i.shown_status }}{% endif %}</td></tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">No invoices yet. The first one will be #1205.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
