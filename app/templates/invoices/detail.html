@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Invoice #{{ vm.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.index') }}">← All invoices</a></p>
+<h1>Invoice #{{ vm.number }} — {% if vm.shown_status in ('Overdue', 'Void') %}<span class="bad">{{ vm.shown_status }}</span>{% else %}{{ vm.shown_status }}{% endif %}</h1>
+
+<div class="card">
+  <div class="stats">
+    <div class="stat"><div class="label">Billed to</div><div class="value">{{ vm.client.name }}</div></div>
+    <div class="stat"><div class="label">Total due</div><div class="value">{{ vm.total_cents | money }}</div></div>
+    <div class="stat"><div class="label">Invoice / due date</div><div class="value">{{ vm.invoice_date }} / {{ vm.due_date }}</div></div>
+    <div class="stat"><div class="label">Service period</div><div class="value">{{ vm.period }}</div></div>
+  </div>
+  <table style="margin-top:16px">
+    <tr><th>Description</th><th>Hours</th><th>Rate</th><th>Amount</th></tr>
+    {% for l in vm.lines %}
+    <tr><td>{{ l.description }}</td><td>{{ l.hours }}</td><td>{{ l.rate_cents | money }}</td><td>{{ l.amount_cents | money }}</td></tr>
+    {% endfor %}
+  </table>
+  {% if vm.notes %}<p><strong>Notes:</strong> {{ vm.notes }}</p>{% endif %}
+  {% if not inv.pdf_path %}<div class="notice">The PDF for this invoice wasn't created. Click Generate PDF below.</div>{% endif %}
+  {% if inv.status == 'void' %}<p class="bad">Voided {{ inv.voided_at | localtime }} — {{ inv.void_reason }}</p>{% endif %}
+  <p>
+    {% if inv.pdf_path %}<a class="button" href="{{ url_for('invoices.download_pdf', invoice_id=inv.id) }}">Download PDF</a>{% endif %}
+    {% if inv.status == 'unpaid' %}<a class="button" href="{{ url_for('invoices.edit', invoice_id=inv.id) }}">Edit date / notes</a>{% endif %}
+  </p>
+  <form method="post" action="{{ url_for('invoices.regenerate_pdf', invoice_id=inv.id) }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"> <button type="submit" class="secondary">{% if inv.pdf_path %}Regenerate PDF{% else %}Generate PDF{% endif %}</button>
+  </form>
+</div>
+
+{% if entries %}
+<div class="card">
+  <h2>Time on this invoice</h2>
+  <table>
+    <tr><th>Date</th><th>Product</th><th>Hours</th><th>Notes</th></tr>
+    {% for e in entries %}<tr><td>{{ e.work_date }}</td><td>{{ e.product_name }}</td><td>{{ e.duration_seconds | hours }}</td><td>{{ e.notes[:120] }}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if inv.status != 'void' %}
+<div class="card">
+  <h2>Void this invoice</h2>
+  <p class="muted">The invoice stays on record marked VOID, its time is released so it can be billed again,
+    and a security alert is raised. Nothing is deleted.</p>
+  <form method="post" action="{{ url_for('invoices.void', invoice_id=inv.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="reason">Reason</label>
+    <input type="text" id="reason" name="reason" maxlength="300" required>
+    <label><input type="checkbox" name="confirm" value="yes" required> Yes, void invoice #{{ vm.number }}</label>
+    <button type="submit" class="danger">Void invoice</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

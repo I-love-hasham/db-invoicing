@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}New invoice{% endblock %}
+{% block content %}
+<h1>New invoice</h1>
+{% if request.args.get('changed') %}<div class="notice">Time for this period changed since the preview. Check the updated preview below.</div>{% endif %}
+<form method="get" class="card filters">
+  <div><label for="client_id">Client</label><select id="client_id" name="client_id" required>
+    <option value="">Choose…</option>
+    {% for c in clients %}<option value="{{ c.id }}" {% if f.client_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
+  <div><label for="period_from">Service from</label><input type="date" id="period_from" name="period_from" value="{{ f.period_from }}" required></div>
+  <div><label for="period_to">Service to</label><input type="date" id="period_to" name="period_to" value="{{ f.period_to }}" required></div>
+  <div><label for="invoice_date">Invoice date</label><input type="date" id="invoice_date" name="invoice_date" value="{{ f.invoice_date }}" required></div>
+  <div><button type="submit">Preview</button></div>
+</form>
+
+{% if preview %}
+<div class="card">
+  <h2>Preview — invoice #{{ preview.next_number }} for {{ preview.client.name }}</h2>
+  {% if preview.running_timer %}<div class="notice">A timer is still running for this client in this period. Its time is NOT included — stop it first if it should be.</div>{% endif %}
+  <table>
+    <tr><th>Description</th><th>Hours</th><th>Rate</th><th>Amount</th></tr>
+    {% for l in preview.lines %}
+    <tr><td>{{ l.description }}</td><td>{{ l.hours }}</td><td>{{ l.rate_cents | money }}</td><td>{{ l.amount_cents | money }}</td></tr>
+    {% endfor %}
+    <tr><td colspan="3"><strong>Total due</strong> <span class="muted">(due {{ preview.due_date }}, Net {{ preview.client.payment_terms_days }})</span></td>
+        <td><strong>{{ preview.total_cents | money }}</strong></td></tr>
+  </table>
+  <p class="muted">{{ preview.entries|length }} time entries will be locked to this invoice.</p>
+  <form method="post" action="{{ url_for('invoices.create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="client_id" value="{{ preview.client.id }}">
+    <input type="hidden" name="period_from" value="{{ f.period_from }}">
+    <input type="hidden" name="period_to" value="{{ f.period_to }}">
+    <input type="hidden" name="invoice_date" value="{{ f.invoice_date }}">
+    <input type="hidden" name="fingerprint" value="{{ preview.fingerprint }}">
+    <label for="notes">Notes on the invoice (optional)</label>
+    <textarea id="notes" name="notes" rows="3" maxlength="2000"></textarea>
+    <button type="submit">Create invoice #{{ preview.next_number }}</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

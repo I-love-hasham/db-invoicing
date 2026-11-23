@@ -19,7 +19,7 @@ from .db import get_audit_db, get_db
 GENESIS = "0" * 64
 FIELDS = ("ts", "username", "ip", "user_agent", "category", "action", "target", "client_id", "outcome",
           "details")
-CATEGORIES = ("auth", "settings", "security", "audit", "clients", "products", "time", "system", "error")
+CATEGORIES = ("auth", "settings", "security", "audit", "clients", "products", "time", "invoices", "system", "error")
 
 # Any detail key that looks like it could hold a secret is replaced before writing.
 _SENSITIVE_KEY = re.compile(

@@ -109,3 +109,36 @@ def authenticator():
                                          f"new device from {g.ip}.")
     return render_template("settings/done.html",
                            message="Authenticator updated. Codes from the old phone no longer work.")
+
+
+@bp.route("/business", methods=["GET", "POST"])
+@auth.fresh_2fa_required
+def business_details():
+    """Name, address, phone, email and footer printed on new invoices."""
+    from .. import business, forms
+    current = business.get_details()
+    if request.method == "GET":
+        return render_template("settings/business.html", b=current)
+    try:
+        values = {
+            "name": forms.text(request.form, "name", "Business name", 100, required=True),
+            "address": forms.text(request.form, "address", "Address", 300, multiline=True),
+            "phone": forms.text(request.form, "phone", "Phone", 40),
+            "email": forms.email(request.form, "email", "Email"),
+            "footer": forms.text(request.form, "footer", "Invoice footer", 140),
+        }
+    except forms.FormError as e:
+        return render_template("settings/business.html", b={**current, **request.form.to_dict()},
+                               error=e.message), 400
+    with atomic():
+        before = business.get_details()
+        changed = [k for k in values if values[k] != before[k]]
+        if changed:
+            business.save_details(values)
+            audit.log("business_details_changed", "settings",
+                      details={"before": {k: before[k] for k in changed}, "after": {k: values[k] for k in changed}})
+            audit.raise_alert("business_details_changed",
+                              f"The business details printed on invoices were changed ({', '.join(changed)}) "
+                              f"by {g.user['username']} from {g.ip}.")
+    return render_template("settings/done.html",
+                           message="Business details saved. They appear on invoices created from now on.")
