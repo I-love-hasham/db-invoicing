@@ -68,12 +68,74 @@ GOOD = ['Reset password to default for the front desk user',"User's password was
 'upgraded admin pc to Windows 11 24H2','moved user to OU=Staff','password expiry set to 90 days']
 
 
-@pytest.mark.parametrize("text", BAD)
+# Second set: written by the independent reviewer to try to beat the detector.
+BAD2 = [
+ 'new pw "Autumn2026" for front desk',            # quoted
+ "temp password 'Bluebird7' given to user",
+ 'pass is Bluebird7',
+ 'pwd->Bluebird7',
+ 'admin | Bluebird7! | router',
+ 'creds: admin, Bluebird7!',
+ 'user: jsmith\npass: Bluebird7',                  # two-line
+ 'password same as before: Bluebird7',
+ 'password: Ｂluebird７',                         # fullwidth look-alikes
+ 'TeamViewer ID 1 234 567 890 pw 8hq2kd',
+ 'AnyDesk 123 456 789 / Unattended123',
+ 'router admin/admin123 at 192.168.1.1',
+ 'QuickBooks login sarah@okg.com Qb2026books',
+ 'bank login jsmith Chase!2026',
+ 'door code 4471',
+ 'alarm code 0923#',
+ 'gate code is 1979',
+ 'M365 recovery codes 4821-9932 1283-4410 5521-7710',
+ 'seed phrase: abandon ability able about above absent absorb abstract absurd abuse access accident',
+ 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 root@srv',
+ 'Server=sql01;Database=acct;User Id=sa;Password=Sq1Server!;',
+ 'connection string uses User=app;Pwd=Abc12345',
+ 'mongodb://admin:S3cretPw@db01:27017',
+ 'https://admin:Hunter2pw@nas.local/',
+ 'local admin acct: .\\localadmin  Winter26',
+ 'enable secret Cisco123 on core switch',
+ 'snmp community string Pr1vate',
+ 'Wi-Fi: OKG-Guest / Welcome2OKG',
+ 'SSID OKG-Staff  key=Pomona10970!',
+ 'set BIOS supervisor pw to bios2026',
+ 'gave him the code 739204 from authenticator',
+ 'iDRAC root calvin',                                  # default Dell creds (no keyword)
+ 'PIN changed to 5582 for copier',
+ 'safe combo 12-34-56',
+ 'Duo bypass code 948201',
+ 'LAPS password for PC-12 was Xk3$pq9Lm',
+ 'vault unlock key 9F8A-77BC-1D2E-3F40',
+ 'login: admin\npassword: P@ssw0rd',
+ 'P@ssw0rd',                                            # bare
+ 'Summer2026',                                          # bare common pattern
+]
+GOOD2 = [
+ 'Reset password for 3 users after phishing test', 'Password manager rollout: installed Keeper on 5 PCs',
+ 'Explained password complexity rules to staff', 'pw reset for jsmith, done', 'key card reader at door replaced',
+ 'set up new SSID for guest network', 'updated router firmware to 1.2.3.4', 'checked admin audit log in Entra',
+ 'login page loads slowly in Edge, cleared cache', 'enabled BitLocker on 4 laptops, keys escrowed to Entra',
+ 'printed recovery codes for the safe (not stored here)', 'token signing cert renewed in ADFS',
+ 'MFA prompts fixed for 2 users', 'replaced PIN pad battery', 'TeamViewer removed from all PCs',
+ 'AnyDesk blocked at firewall', 'QuickBooks Desktop 2024 R5 update installed', 'Chase bank website not loading — DNS issue',
+ 'door code panel rewired', 'alarm panel battery swapped', 'SQL Server 2019 CU25 applied on SQL01',
+ 'connection string updated in web.config to new server name', 'SSH enabled on switch, keys only',
+ 'seeded new SharePoint site with templates', 'gave user admin rights for install, removed after',
+ 'Win11 23H2 to 24H2 upgrade on PC-07', 'moved 120GB mailbox to archive', 'WiFi 6E AP installed in conf room 2',
+ 'Okta to Entra SSO migration call, 1.5h', 'Patched CVE-2026-1234 on firewall', 'reviewed Secure Score, now 78%',
+ 'user forgot password again, reset via SSPR', 'cleared stuck print jobs on HP M404n', 'created password reset ticket #4471',
+ 'set recovery email for CEO mailbox', 'vlan 20 created for VoIP phones', 'Office 365 E3 licenses reassigned (3)',
+ 'replaced DIMM in ESXi host 2 (32GB DDR4-3200)', 'firmware 2.41.0 on UniFi APs', 'renamed admin account to it-admin',
+]
+
+
+@pytest.mark.parametrize("text", BAD + BAD2)
 def test_secrets_are_caught(text):
     assert ai.sensitive_reason(text), text
 
 
-@pytest.mark.parametrize("text", GOOD)
+@pytest.mark.parametrize("text", GOOD + GOOD2)
 def test_normal_notes_pass(text):
     assert ai.sensitive_reason(text) is None, (text, ai.sensitive_reason(text))
 
@@ -210,7 +272,7 @@ def test_blocked_message_shows_what_triggered_it(client, app, clock, claude):
     _entry(client, "set wifi key Guest2026! on AP")
     t = csrf(client, "/time/1")
     page = client.post("/time/1/ai", data={"csrf_token": t, "notes": "set wifi key Guest2026! on AP"}).get_data(as_text=True)
-    assert "key Guest2026!" in page and claude.calls == []
+    assert "wifi Gu•" in page and "Guest2026!" not in page.split("<textarea")[0] and claude.calls == []
 
 
 def test_unsaved_form_changes_are_kept(client, app, clock, claude):
