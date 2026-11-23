@@ -51,16 +51,24 @@ def _write_pdf(invoice_id: int, action: str) -> None:
         inv, lines = invoicing.load(invoice_id)
         vm = invoicing.view_model(inv, lines, _today())
         client_name = json.loads(inv["client_snapshot"])["name"]
-        rel, digest = pdf.save(data_dir, client_name, inv["invoice_date"][:4], inv["number"], pdf.render(vm))
-        db.execute("UPDATE invoices SET pdf_path = ?, pdf_sha256 = ? WHERE id = ?", (rel, digest, invoice_id))
-        details = {"file": rel, "sha256": digest}
+        staged = pdf.stage(data_dir, client_name, inv["invoice_date"][:4], inv["number"], pdf.render(vm))
         old = inv["pdf_path"]
-        if old and old != rel:
-            # e.g. invoice date moved to another year: don't leave a stale copy behind
-            pdf.remove(data_dir, old)
-            details["removed_old_file"] = old
-        audit.log(action, "invoices", target=f"invoice:{inv['number']}", client_id=inv["client_id"],
-                  details=details)
+        try:
+            # record + audit first; the file only replaces the old one once those succeeded
+            db.execute("UPDATE invoices SET pdf_path = ?, pdf_sha256 = ? WHERE id = ?",
+                       (staged["rel"], staged["sha256"], invoice_id))
+            details = {"file": staged["rel"], "sha256": staged["sha256"]}
+            if old and old != staged["rel"]:
+                details["removed_old_file"] = old
+            audit.log(action, "invoices", target=f"invoice:{inv['number']}", client_id=inv["client_id"],
+                      details=details)
+            pdf.publish(staged)
+        except BaseException:
+            pdf.discard(staged)
+            raise
+    if old and old != staged["rel"]:
+        # e.g. invoice date moved to another year: remove the stale copy, after the commit
+        pdf.remove(data_dir, old)
 
 
 # ---------------------------------------------------------------- list

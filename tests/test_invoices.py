@@ -260,3 +260,33 @@ def test_moving_invoice_to_another_year_removes_old_pdf(client, app, clock):
     assert not os.path.exists(os.path.join(base, "2026", "Invoice-1205.pdf"))
     assert os.path.exists(os.path.join(base, "2027", "Invoice-1205.pdf"))
     assert client.get("/invoices/1/pdf").status_code == 200
+
+
+def test_audit_failure_during_pdf_leaves_old_file_intact(client, app, clock, monkeypatch):
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    from app import audit
+    real = audit.log
+
+    def failing(action, *a, **kw):
+        if action == "invoice_pdf_regenerated":
+            raise OSError("disk full")
+        return real(action, *a, **kw)
+    monkeypatch.setattr(audit, "log", failing)
+    t = csrf(client, "/invoices/1")
+    assert client.post("/invoices/1/pdf", data={"csrf_token": t}).status_code == 500
+    monkeypatch.setattr(audit, "log", real)
+    assert client.get("/invoices/1/pdf").status_code == 200      # old file + old hash still match
+    folder = os.path.join(app.config["DATA_DIR"], "Invoices", "OKG Tech", "2026")
+    assert sorted(os.listdir(folder)) == ["Invoice-1205.pdf"]
+
+
+def test_pdf_remove_only_touches_invoice_pdfs(app):
+    from app import pdf
+    data = app.config["DATA_DIR"]
+    pdf.remove(data, "app.db")
+    pdf.remove(data, "../etc/passwd")
+    assert os.path.exists(os.path.join(data, "app.db"))

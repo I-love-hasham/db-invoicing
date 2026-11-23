@@ -169,13 +169,18 @@ def safe_folder_name(name: str) -> str:
     return cleaned[:60]
 
 
-def save(data_dir: str, client_name: str, year: str, number: int, pdf_bytes: bytes) -> tuple[str, str]:
-    """Write Invoices/<Client>/<Year>/Invoice-<n>.pdf under DATA_DIR. Returns (relative path, sha256)."""
+def _target(data_dir: str, client_name: str, year: str, number: int) -> tuple[str, str, str]:
     rel = os.path.join("Invoices", safe_folder_name(client_name), year, f"Invoice-{number}.pdf")
     base = os.path.realpath(data_dir)
     full = os.path.realpath(os.path.join(base, rel))
-    if not full.startswith(base + os.sep):
-        raise ValueError("invoice path escapes the data folder")
+    if not full.startswith(os.path.join(base, "Invoices") + os.sep):
+        raise ValueError("invoice path escapes the invoices folder")
+    return rel, full, base
+
+
+def stage(data_dir: str, client_name: str, year: str, number: int, pdf_bytes: bytes) -> dict:
+    """Write the PDF to a unique temp file next to its final place. Nothing is replaced yet."""
+    rel, full, _ = _target(data_dir, client_name, year, number)
     os.makedirs(os.path.dirname(full), mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(full), prefix=".tmp-", suffix=".pdf")   # unique, 0600
     try:
@@ -183,16 +188,31 @@ def save(data_dir: str, client_name: str, year: str, number: int, pdf_bytes: byt
             fh.write(pdf_bytes)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, full)   # atomic: never a half-written PDF
     except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        discard({"tmp": tmp})
         raise
-    return rel, hashlib.sha256(pdf_bytes).hexdigest()
+    return {"rel": rel, "full": full, "tmp": tmp, "sha256": hashlib.sha256(pdf_bytes).hexdigest()}
+
+
+def publish(staged: dict) -> None:
+    os.replace(staged["tmp"], staged["full"])   # atomic: never a half-written PDF
+
+
+def discard(staged: dict) -> None:
+    if os.path.exists(staged["tmp"]):
+        os.remove(staged["tmp"])
+
+
+def save(data_dir: str, client_name: str, year: str, number: int, pdf_bytes: bytes) -> tuple[str, str]:
+    staged = stage(data_dir, client_name, year, number, pdf_bytes)
+    publish(staged)
+    return staged["rel"], staged["sha256"]
 
 
 def remove(data_dir: str, rel: str) -> None:
+    """Delete an old invoice PDF. Only ever touches .pdf files inside DATA_DIR/Invoices."""
     base = os.path.realpath(data_dir)
     full = os.path.realpath(os.path.join(base, rel))
-    if full.startswith(base + os.sep) and os.path.isfile(full):
+    if (full.startswith(os.path.join(base, "Invoices") + os.sep) and full.endswith(".pdf")
+            and os.path.isfile(full)):
         os.remove(full)
