@@ -17,8 +17,9 @@ from flask import current_app, g, has_request_context
 from .db import get_audit_db, get_db
 
 GENESIS = "0" * 64
-FIELDS = ("ts", "username", "ip", "user_agent", "category", "action", "target", "outcome", "details")
-CATEGORIES = ("auth", "settings", "security", "audit", "system", "error")
+FIELDS = ("ts", "username", "ip", "user_agent", "category", "action", "target", "client_id", "outcome",
+          "details")
+CATEGORIES = ("auth", "settings", "security", "audit", "clients", "products", "system", "error")
 
 # Any detail key that looks like it could hold a secret is replaced before writing.
 _SENSITIVE_KEY = re.compile(
@@ -61,7 +62,7 @@ def _head_mac(count: int, last_hash: str) -> str:
 
 
 def log(action: str, category: str, outcome: str = "success", target: str | None = None,
-        details: dict | None = None, username: str | None = None) -> None:
+        details: dict | None = None, username: str | None = None, client_id: int | None = None) -> None:
     """Write one audit entry. Raises on failure (fail closed)."""
     if category not in CATEGORIES:
         raise ValueError(f"unknown audit category {category!r}")
@@ -75,6 +76,7 @@ def log(action: str, category: str, outcome: str = "success", target: str | None
         "category": category,
         "action": action,
         "target": target,
+        "client_id": client_id,   # lets the audit page filter everything about one client
         "outcome": outcome,
         "details": json.dumps(redact(details or {}), ensure_ascii=False, sort_keys=True),
     }
@@ -86,8 +88,8 @@ def log(action: str, category: str, outcome: str = "success", target: str | None
         count = (head["entry_count"] if head else 0) + 1
         entry_hash = _mac(prev + "|" + _payload(entry))
         conn.execute(
-            "INSERT INTO audit_log (ts, username, ip, user_agent, category, action, target,"
-            " outcome, details, prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO audit_log (ts, username, ip, user_agent, category, action, target, client_id,"
+            " outcome, details, prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (*[entry[f] for f in FIELDS], prev, entry_hash),
         )
         conn.execute(

@@ -49,3 +49,7 @@ td.details { font-family: ui-monospace, Consolas, monospace; font-size: 12px; ma
 .stat .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
 .stat .value { font-size: 20px; font-weight: 700; margin-top: 6px; }
 .pager { margin-top: 12px; display: flex; gap: 12px; align-items: center; }
+textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 15px; font-family: inherit; resize: vertical; }
+textarea:focus { outline: 2px solid var(--gold); border-color: var(--gold); }
+button.link.dark { color: var(--forest); text-decoration: underline; font-size: 13px; }
+td input[type=text] { max-width: 140px; }

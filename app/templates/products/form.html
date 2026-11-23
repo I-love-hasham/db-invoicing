@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{% if is_new %}Add product{% else %}Edit product{% endif %}{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{% if is_new %}Add product{% else %}Edit product{% endif %}</h1>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="name">Name (e.g. Regular Hours)</label>
+    <input type="text" id="name" name="name" value="{{ product.name or '' }}" required maxlength="80">
+    <label for="description">Invoice description (e.g. IT services)</label>
+    <input type="text" id="description" name="description" value="{{ product.description or '' }}" maxlength="200">
+    <label for="unit">Charged per</label>
+    <select id="unit" name="unit">
+      <option value="hour" {% if product.unit == 'hour' %}selected{% endif %}>Hour</option>
+      <option value="each" {% if product.unit == 'each' %}selected{% endif %}>Each (flat fee)</option>
+    </select>
+    <label for="default_rate">Default rate in $ (optional — clients can have their own)</label>
+    <input type="text" id="default_rate" name="default_rate" value="{{ product.default_rate or '' }}" inputmode="decimal" maxlength="12">
+    <button type="submit">Save</button>
+  </form>
+  <p><a href="{{ url_for('products.index') }}">Cancel</a></p>
+</div>
+{% endblock %}

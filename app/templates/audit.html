@@ -11,6 +11,8 @@
     <option value="">All</option>
     <option value="success" {% if f.outcome == 'success' %}selected{% endif %}>success</option>
     <option value="failure" {% if f.outcome == 'failure' %}selected{% endif %}>failure</option></select></div>
+  <div><label for="client">Client</label><select id="client" name="client">
+    <option value="">All</option>{% for c in clients %}<option value="{{ c.id }}" {% if f.client == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
   <div><label for="q">Search (action, client, IP…)</label><input type="text" id="q" name="q" value="{{ f.q }}"></div>
   <div><button type="submit">Filter</button>
     <a class="button" href="{{ url_for('audit.export_csv', **f) }}">Export CSV</a></div>

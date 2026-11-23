@@ -56,8 +56,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             return {"open_alerts": audit.open_alerts()}
         return {"open_alerts": []}
 
-    from .views import audit_views, auth_views, main_views, settings_views
-    for module in (auth_views, main_views, settings_views, audit_views):
+    from . import forms
+    app.jinja_env.filters["money"] = forms.format_money
+    app.jinja_env.filters["money_input"] = forms.cents_to_input
+
+    from .views import audit_views, auth_views, clients_views, main_views, products_views, settings_views
+    for module in (auth_views, main_views, settings_views, audit_views, clients_views, products_views):
         app.register_blueprint(module.bp)
 
     def _error(exc):
