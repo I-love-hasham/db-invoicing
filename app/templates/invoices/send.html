@@ -16,6 +16,7 @@
     <input type="hidden" name="send_token" value="{{ send_token }}">
     <label for="body">Message</label>
     <textarea id="body" name="body" rows="9" maxlength="5000" required>{{ body }}</textarea>
+    {% if already_sent %}<label><input type="checkbox" name="resend" value="yes"> This invoice was already emailed — send it again</label>{% endif %}
     <button type="submit" {% if not email_ready or not to %}disabled{% endif %}>Send</button>
   </form>
 </div>
@@ -23,7 +24,7 @@
 <div class="card"><h2>Already sent</h2>
   <table><tr><th>When</th><th>To</th><th>Subject</th><th>Result</th></tr>
   {% for h in history %}<tr><td>{{ h.created_at | localtime }}</td><td>{{ h.to_addr }}</td><td>{{ h.subject }}</td>
-    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% else %}<span class="bad">{{ h.status }}</span> {{ h.error or '' }}{% endif %}</td></tr>{% endfor %}
+    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% elif h.status == 'sending' %}<span class="bad">unknown — check billing@ Sent Items</span>{% else %}<span class="bad">{{ h.status }}</span> {{ h.error or '' }}{% endif %}</td></tr>{% endfor %}
   </table></div>
 {% endif %}
 {% endblock %}

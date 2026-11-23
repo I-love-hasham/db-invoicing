@@ -48,7 +48,7 @@ The app can **only send**, **only from billing@**. It never reads any mailbox.
    in step 5, scoped to one mailbox. An Entra Mail.Send grant would apply to *every* mailbox.
 3. **Certificate** (on the server, in the project folder):
    ```bash
-   install -d -o 10001 -g 10001 -m 700 secrets
+   sudo install -d -o 10001 -g 10001 -m 700 secrets
    openssl req -x509 -newkey rsa:3072 -sha256 -days 730 -nodes -subj "/CN=db-invoicing" \
      -keyout /tmp/k.pem -out /tmp/c.pem
    cat /tmp/k.pem /tmp/c.pem | sudo tee secrets/m365.pem >/dev/null && shred -u /tmp/k.pem
@@ -68,6 +68,9 @@ The app can **only send**, **only from billing@**. It never reads any mailbox.
    Test-ServicePrincipalAuthorization -Identity <Application ID> -Resource billing@yourdomain
    Test-ServicePrincipalAuthorization -Identity <Application ID> -Resource you@yourdomain
    ```
+   `Test-ServicePrincipalAuthorization` only checks Exchange grants, so also confirm the app
+   registration's **API permissions** list in Entra is empty. RBAC changes can take a while
+   (up to about an hour) to apply.
 6. **SPF, DKIM, DMARC** on the domain, so invoices don't land in spam.
 7. Restart the app (`docker compose up -d`), then Settings → Email → set the copy address → **Send a test email**.
 

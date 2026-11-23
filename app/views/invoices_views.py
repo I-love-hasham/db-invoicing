@@ -364,10 +364,17 @@ def _invoice_email_defaults(inv) -> dict:
     sig = business.get_details()["signature"]
     subject = (f"Invoice #{inv['number']} – {biz['name']} – {invoicing.us_date(inv['period_from'])} to "
                f"{invoicing.us_date(inv['period_to'])}")
-    body = (f"Hi {vm['client']['name']},\n\n"
-            f"Please find attached invoice #{inv['number']} for {forms.format_money(inv['total_cents'])} for IT "
-            f"services from {vm['period'].replace(' – ', ' to ')}. Payment is due by {vm['due_date']} ({vm['terms']}).\n\n"
-            f"Thank you,\n{sig}\n{biz['name']}")
+    if inv["status"] == "paid":
+        body = (f"Hi {vm['client']['name']},\n\n"
+                f"Attached for your records is invoice #{inv['number']} for {forms.format_money(inv['total_cents'])}, "
+                f"marked paid on {invoicing.us_date(inv['paid_at'])}. Thank you for your payment.\n\n"
+                f"{sig}\n{biz['name']}")
+    else:
+        body = (f"Hi {vm['client']['name']},\n\n"
+                f"Please find attached invoice #{inv['number']} for {forms.format_money(inv['total_cents'])} for IT "
+                f"services from {vm['period'].replace(' – ', ' to ')}. Payment is due by {vm['due_date']} "
+                f"({vm['terms']}).\n\n"
+                f"Thank you,\n{sig}\n{biz['name']}")
     return {"subject": subject, "body": body}
 
 
@@ -398,8 +405,10 @@ def send_invoice(invoice_id: int):
     to = _current_client_email(inv)
     cc, bcc = mailer.copy_recipients()
     defaults = _invoice_email_defaults(inv)
+    history = mailer.history(invoice_id)
+    already_sent = any(h["kind"] == "invoice" and h["status"] == "sent" for h in history)
     ctx = {"inv": inv, "to": to, "cc": cc, "bcc": bcc, "subject": defaults["subject"],
-           "email_ready": graph.configured(), "history": mailer.history(invoice_id)}
+           "email_ready": graph.configured(), "history": history, "already_sent": already_sent}
     if request.method == "GET":
         if inv["status"] == "void":
             abort(400)
@@ -408,6 +417,8 @@ def send_invoice(invoice_id: int):
         body = forms.text(request.form, "body", "Message", 5000, required=True, multiline=True)
         if not to:
             raise forms.FormError("to", "This client has no billing email. Add one on the client's page.")
+        if already_sent and request.form.get("resend") != "yes":
+            raise forms.FormError("resend", "This invoice was already emailed. Tick the box to send it again.")
     except forms.FormError as e:
         return render_template("invoices/send.html", body=request.form.get("body", ""),
                                send_token=request.form.get("send_token", ""), error=e.message, **ctx), 400
@@ -416,6 +427,9 @@ def send_invoice(invoice_id: int):
         current = db.execute("SELECT status FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
         if current["status"] == "void":
             raise mailer.SendRefused("This invoice was voided.")
+        if current["status"] != inv["status"]:
+            raise mailer.SendRefused("This invoice changed (paid/unpaid) while you were writing. Reload and check "
+                                     "the message.")
     try:
         pdf_bytes = _verified_pdf(inv)
         mailer.send("invoice", request.form.get("send_token", ""), [to], defaults["subject"], body, invoice=inv,

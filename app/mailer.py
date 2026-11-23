@@ -6,11 +6,13 @@ Rules (from the spec):
 - every send is in the audit log (recipients, subject, time — never the message text);
 - one Send click = at most one email (unique send token, claimed under the lock).
 """
-import json
+import os
+import re
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
-from flask import current_app, g, has_request_context
 
 from . import audit, graph
 from .db import atomic, get_db
@@ -47,8 +49,11 @@ def copy_recipients() -> tuple[list[str], list[str]]:
     return ([s["address"]], []) if s["mode"] == "cc" else ([], [s["address"]])
 
 
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32}$")
+
+
 def new_send_token() -> str:
-    return secrets.token_urlsafe(24)
+    return secrets.token_urlsafe(24)     # 32 characters
 
 
 # ---------------------------------------------------------------- sending with a paper trail
@@ -60,6 +65,8 @@ def send(kind: str, send_token: str, to: list[str], subject: str, body: str, *,
 
     `recheck(db)` runs under the lock right before the claim; it raises SendRefused if the
     email must not go out any more (e.g. the invoice was paid a moment ago)."""
+    if not _TOKEN_RE.match(send_token or ""):
+        raise SendRefused("This form is out of date. Reload the page and try again.")
     cc, bcc = copy_recipients() if add_copy else ([], [])
     now = audit.utcnow_iso()
     client_id = invoice["client_id"] if invoice is not None else None
@@ -67,6 +74,14 @@ def send(kind: str, send_token: str, to: list[str], subject: str, body: str, *,
     with atomic() as db:
         if recheck is not None:
             recheck(db)
+        if follow_up_id is not None and db.execute(
+                "SELECT 1 FROM email_log WHERE follow_up_id = ? AND status IN ('sending', 'sent')",
+                (follow_up_id,)).fetchone():
+            raise SendRefused("This reminder was already sent (or is being sent right now).")
+        if kind == "invoice" and db.execute(
+                "SELECT 1 FROM email_log WHERE invoice_id = ? AND kind = 'invoice' AND status = 'sending'",
+                (invoice["id"],)).fetchone():
+            raise SendRefused("This invoice is being sent right now. Check the history in a moment.")
         if db.execute("SELECT 1 FROM email_log WHERE send_token = ?", (send_token,)).fetchone():
             raise SendRefused("This email was already sent (the Send button was clicked twice).")
         log_id = db.execute(
@@ -100,6 +115,14 @@ def history(invoice_id: int):
 
 
 # ---------------------------------------------------------------- security alerts by email
+#
+# Alerts are emailed by a background thread (one per worker process), never inside a
+# page request: a slow or down Microsoft can't slow the app, and visitors can't make
+# the app call out by loading pages. Claims expire, so a crash never strands an alert.
+
+CLAIM_TTL = 600          # seconds before a stuck 'sending' claim is retried
+FLUSH_EVERY = 60         # seconds between background flushes
+
 
 def _alert_email(to: str, rows) -> None:
     lines = [f"- {r['ts'][:16].replace('T', ' ')} UTC — {r['message']}" for r in rows]
@@ -109,41 +132,60 @@ def _alert_email(to: str, rows) -> None:
     graph.send_mail([to], f"[Invoicing app] Security alert ({len(rows)})", body)
 
 
-def flush_alerts() -> None:
-    """Email security alerts that haven't been emailed yet. Called after each request; cheap when
-    there's nothing to send. Alerts older than 24 h when email is first set up are marked skipped."""
-    if not graph.configured():
+def _mark_email_configured(db) -> None:
+    """The first time email works, old alerts (>24 h) are marked skipped once — not on every flush."""
+    if db.execute("SELECT 1 FROM app_settings WHERE key = 'email.configured_at'").fetchone():
         return
-    db = get_db()
-    if db.execute("SELECT 1 FROM security_alerts WHERE emailed_at IS NULL LIMIT 1").fetchone() is None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+    db.execute("UPDATE security_alerts SET emailed_at = 'skipped' WHERE emailed_at IS NULL AND ts < ?", (cutoff,))
+    db.execute("INSERT INTO app_settings (key, value) VALUES ('email.configured_at', ?)", (audit.utcnow_iso(),))
+
+
+def flush_alerts() -> None:
+    """Email security alerts that haven't gone out yet. Safe to run from several workers."""
+    if not graph.configured():
         return
     to = copy_settings()["address"]
     if not to:
         return
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
-    claim = "sending:" + secrets.token_hex(8)
-    with atomic() as wdb:
-        wdb.execute("UPDATE security_alerts SET emailed_at = 'skipped' WHERE emailed_at IS NULL AND ts < ?", (cutoff,))
-        wdb.execute("UPDATE security_alerts SET emailed_at = ? WHERE id IN (SELECT id FROM security_alerts"
-                    " WHERE emailed_at IS NULL ORDER BY id LIMIT 20)", (claim,))
-        rows = wdb.execute("SELECT * FROM security_alerts WHERE emailed_at = ? ORDER BY id", (claim,)).fetchall()
+    now = time.time()
+    claim = f"sending:{now:.0f}:{secrets.token_hex(6)}"
+    with atomic() as db:
+        _mark_email_configured(db)
+        # release claims older than CLAIM_TTL (the worker that took them died)
+        for r in db.execute("SELECT id, emailed_at FROM security_alerts WHERE emailed_at LIKE 'sending:%'").fetchall():
+            try:
+                taken = float(r["emailed_at"].split(":")[1])
+            except (IndexError, ValueError):
+                taken = 0
+            if now - taken > CLAIM_TTL:
+                db.execute("UPDATE security_alerts SET emailed_at = NULL WHERE id = ?", (r["id"],))
+        db.execute("UPDATE security_alerts SET emailed_at = ? WHERE id IN (SELECT id FROM security_alerts"
+                   " WHERE emailed_at IS NULL ORDER BY id LIMIT 20)", (claim,))
+        rows = db.execute("SELECT * FROM security_alerts WHERE emailed_at = ? ORDER BY id", (claim,)).fetchall()
     if not rows:
         return
     try:
         _alert_email(to, rows)
     except graph.GraphError as e:
-        with atomic() as wdb:
-            wdb.execute("UPDATE security_alerts SET email_attempts = email_attempts + 1,"
-                        " emailed_at = CASE WHEN email_attempts + 1 >= ? THEN 'failed' ELSE NULL END"
-                        " WHERE emailed_at = ?", (MAX_ALERT_ATTEMPTS, claim))
+        with atomic() as db:
+            db.execute("UPDATE security_alerts SET email_attempts = email_attempts + 1,"
+                       " emailed_at = CASE WHEN email_attempts + 1 >= ? THEN 'failed' ELSE NULL END"
+                       " WHERE emailed_at = ?", (MAX_ALERT_ATTEMPTS, claim))
             audit.log("graph_sendmail", "outside", outcome="failure",
                       details={"kind": "alert", "alerts": len(rows), "error": str(e)[:300]})
         return
-    now = audit.utcnow_iso()
-    with atomic() as wdb:
-        wdb.execute("UPDATE security_alerts SET emailed_at = ? WHERE emailed_at = ?", (now, claim))
+    sent = audit.utcnow_iso()
+    with atomic() as db:
+        db.execute("UPDATE security_alerts SET emailed_at = ? WHERE emailed_at = ?", (sent, claim))
         audit.log("graph_sendmail", "outside", details={"kind": "alert", "alerts": len(rows)})
         audit.log("alert_emailed", "email", details={"to": [to], "alerts": len(rows)})
+
+
+def unemailed_alert_count() -> int:
+    """Alerts that could not be emailed (failed) or were skipped — shown on the dashboard."""
+    return get_db().execute("SELECT COUNT(*) AS n FROM security_alerts WHERE emailed_at IN ('failed', 'skipped')"
+                            " AND acknowledged_at IS NULL").fetchone()["n"]
 
 
 def send_direct_alert(to: str, message: str) -> None:
@@ -160,13 +202,29 @@ def send_direct_alert(to: str, message: str) -> None:
                   details={"kind": "alert_old_address", "error": str(e)[:300]})
 
 
-def init_app(app):
-    @app.after_request
-    def _flush(response):
-        # never let alert emailing break a page; only for normal page requests
-        if has_request_context() and g.get("ip") and response.status_code < 500:
-            try:
+_worker = {"pid": None}
+_worker_lock = threading.Lock()
+
+
+def _loop(app) -> None:
+    while True:
+        time.sleep(FLUSH_EVERY)
+        try:
+            with app.app_context():
                 flush_alerts()
-            except Exception:
-                current_app.logger.exception("alert email flush failed")
-        return response
+        except Exception:
+            app.logger.exception("alert email flush failed")
+
+
+def init_app(app):
+    if app.config.get("TESTING"):
+        return          # tests call flush_alerts() directly
+
+    @app.before_request
+    def _start_worker():
+        # one background thread per worker process (gunicorn forks after preloading)
+        if _worker["pid"] != os.getpid():
+            with _worker_lock:
+                if _worker["pid"] != os.getpid():
+                    threading.Thread(target=_loop, args=(app,), daemon=True, name="alert-mailer").start()
+                    _worker["pid"] = os.getpid()

@@ -37,7 +37,7 @@
   <table><tr><th>When</th><th>What</th><th>To</th><th>Copy</th><th>Result</th></tr>
   {% for h in emails %}<tr><td>{{ h.created_at | localtime }}</td><td>{{ h.kind | replace('_', ' ') }}</td><td>{{ h.to_addr }}</td>
     <td>{{ h.cc_addr }}{% if h.bcc_addr %} (BCC {{ h.bcc_addr }}){% endif %}</td>
-    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% else %}<span class="bad">{{ h.status }}</span>{% endif %}</td></tr>{% endfor %}
+    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% elif h.status == 'sending' %}<span class="bad">unknown — check billing@ Sent Items</span>{% else %}<span class="bad">{{ h.status }}</span>{% endif %}</td></tr>{% endfor %}
   </table>
 </div>
 {% endif %}

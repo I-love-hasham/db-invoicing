@@ -187,6 +187,8 @@ def test_double_click_sends_once(client, app, clock, ms):
     form = _send_form(client, "/invoices/1/send")
     assert client.post("/invoices/1/send", data=form).status_code == 302
     r = client.post("/invoices/1/send", data=form)
+    assert r.status_code == 400 and "already emailed" in r.get_data(as_text=True)
+    r = client.post("/invoices/1/send", data={**form, "resend": "yes"})     # same click token: still refused
     assert r.status_code == 400 and "already sent" in r.get_data(as_text=True)
     assert len(ms.sends()) == 1
 
@@ -255,6 +257,12 @@ def test_follow_up_send_marks_sent_and_refuses_when_paid(client, app, clock, ms)
 
 # ---------------------------------------------------------------- security alerts by email
 
+def _flush(app):
+    from app import mailer
+    with app.app_context():
+        mailer.flush_alerts()
+
+
 def _new_alert(app, msg="test alert"):
     with app.test_request_context("/"):
         from flask import g
@@ -270,11 +278,11 @@ def test_alerts_are_emailed_once(client, app, clock, ms):
     _set_copy(client)
     ms.calls.clear()
     _new_alert(app)
-    client.get("/")                     # flush runs after each request
+    _flush(app)                         # the background mailer's job
     alert_mails = [m for m in ms.sends() if m["subject"].startswith("[Invoicing app] Security alert (")]
     assert alert_mails and alert_mails[0]["toRecipients"][0]["emailAddress"]["address"] == "david@dbit.example"
     n = len(ms.sends())
-    client.get("/")
+    _flush(app)
     assert len(ms.sends()) == n         # not sent twice
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM security_alerts WHERE emailed_at IS NULL").fetchone()[0] == 0
@@ -286,7 +294,7 @@ def test_alert_email_failure_retries_then_gives_up(client, app, clock, ms):
     ms.send_status = 500
     _new_alert(app)
     for _ in range(6):
-        client.get("/")
+        _flush(app)
     with app.app_context():
         row = get_db().execute("SELECT emailed_at, email_attempts FROM security_alerts ORDER BY id DESC").fetchone()
     assert row["emailed_at"] == "failed" and row["email_attempts"] == 5
@@ -303,3 +311,105 @@ def test_test_email(client, app, clock, ms):
     r = client.post("/settings/email/test", data=form)
     assert r.status_code == 200 and "Test email sent" in r.get_data(as_text=True)
     assert any(m["subject"] == "Test email from your invoicing app" for m in ms.sends())
+
+
+# ---------------------------------------------------------------- review findings
+
+def test_redirects_are_never_followed(monkeypatch):
+    import http.server
+    import threading as th
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append(self.headers.get("Authorization"))
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:%d/stolen" % self.server.server_port)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    t = th.Thread(target=srv.handle_request, daemon=True)
+    t.start()
+    url = "http://127.0.0.1:%d/token" % srv.server_port
+    req = graph.urllib.request.Request(url, data=b"x", headers={"Authorization": "Bearer secret"}, method="POST")
+    with pytest.raises(graph.GraphError, match="redirect"):
+        graph._opener.open(req, timeout=5)      # the same opener _post uses
+    srv.server_close()
+    assert len(hits) == 1          # the redirect target was never contacted
+
+
+def test_blank_or_forged_send_token_refused(client, app, clock, ms):
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    form = _send_form(client, "/invoices/1/send")
+    for bad in ("", "x", "a" * 31, "a" * 33, "../../" + "a" * 26):
+        assert client.post("/invoices/1/send", data={**form, "send_token": bad}).status_code == 400
+    assert ms.sends() == []
+
+
+def test_two_tabs_send_reminder_once(client, app, clock, ms):
+    from datetime import date, timedelta
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    with app.app_context():
+        get_db().execute("UPDATE invoices SET due_date = ?", ((date.today() - timedelta(days=8)).isoformat(),))
+    client.get("/")
+    tab1 = _send_form(client, "/invoices/1/follow-up/7")
+    tab2 = _send_form(client, "/invoices/1/follow-up/7")
+    with app.app_context():      # tab 1's send is in flight (claimed, Graph not answered yet)
+        get_db().execute("INSERT INTO email_log (kind, invoice_id, follow_up_id, to_addr, subject, send_token,"
+                         " status, created_at) VALUES ('follow_up', 1, 1, 'x', 's', ?, 'sending', 'now')",
+                         (tab1["send_token"],))
+    assert client.post("/invoices/1/follow-up/7/send", data=tab2).status_code == 400
+    assert ms.sends() == []
+
+
+def test_paid_invoice_email_has_paid_wording(client, app, clock, ms):
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    t = csrf(client, "/invoices/1")
+    client.post("/invoices/1/paid", data={"csrf_token": t, "paid_date": "2026-11-20", "method": "check"})
+    page = client.get("/invoices/1/send").get_data(as_text=True)
+    assert "for your records" in page and "Payment is due" not in page
+
+
+def test_stuck_alert_claim_is_retried(client, app, clock, ms):
+    import time as _t
+    do_setup(client, app, clock)
+    _set_copy(client)
+    _flush(app)
+    _new_alert(app)
+    with app.app_context():
+        get_db().execute("UPDATE security_alerts SET emailed_at = ? WHERE emailed_at IS NULL",
+                         (f"sending:{_t.time() - 3600:.0f}:dead",))
+    ms.calls.clear()
+    _flush(app)
+    assert ms.sends(), "stale claim should be re-sent"
+
+
+def test_old_alerts_skipped_only_when_email_first_set_up(client, app, clock, ms):
+    do_setup(client, app, clock)
+    _set_copy(client)
+    with app.app_context():
+        get_db().execute("UPDATE security_alerts SET ts = '2020-01-01T00:00:00.000000Z'")
+    _flush(app)                                   # first time: old ones skipped
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM security_alerts WHERE emailed_at = 'skipped'").fetchone()[0]
+    _new_alert(app)
+    ms.send_status = 500
+    _flush(app)                                   # outage...
+    with app.app_context():                       # ...the alert ages past 24 h...
+        get_db().execute("UPDATE security_alerts SET ts = '2020-01-02T00:00:00.000000Z' WHERE emailed_at IS NULL")
+    ms.send_status = 202
+    ms.calls.clear()
+    _flush(app)                                   # ...and is still sent, not skipped
+    assert ms.sends()
+    assert "could not be emailed" in client.get("/").get_data(as_text=True)   # the skipped ones are flagged

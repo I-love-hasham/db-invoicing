@@ -30,7 +30,17 @@ ALLOWED_HOSTS = {LOGIN_HOST, GRAPH_HOST}
 TIMEOUT = 20
 MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024   # Graph's limit for a simple sendMail
 
-_token = {"value": None, "expires": 0.0}
+_token = {"value": None, "expires": 0.0, "for": None}
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise GraphError(f"Blocked: Microsoft answered with a redirect (HTTP {code}).")
+
+
+# No redirects (the token must never follow one to another host) and no proxy
+# picked up from environment variables.
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects())
 _token_lock = threading.Lock()
 
 
@@ -102,7 +112,7 @@ def _post(url: str, body: bytes, headers: dict) -> tuple[int, bytes]:
         raise GraphError("Blocked: not an allowed Microsoft address.")
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:     # nosec - host allow-listed above
+        with _opener.open(req, timeout=TIMEOUT) as resp:     # nosec - host allow-listed above, no redirects
             return resp.status, resp.read(65536)
     except urllib.error.HTTPError as e:
         return e.code, e.read(65536)
@@ -123,8 +133,9 @@ def _error_code(body: bytes) -> str:
 
 def _access_token() -> str:
     cfg = current_app.config
+    ident = (cfg["M365_TENANT_ID"], cfg["M365_CLIENT_ID"])
     with _token_lock:
-        if _token["value"] and _token["expires"] - 300 > time.time():
+        if _token["value"] and _token["for"] == ident and _token["expires"] - 300 > time.time():
             return _token["value"]
         key, cert = _load_credentials(cfg["M365_CERT_PATH"])
         form = urllib.parse.urlencode({
@@ -142,6 +153,7 @@ def _access_token() -> str:
         data = json.loads(body)
         _token["value"] = data["access_token"]
         _token["expires"] = time.time() + int(data.get("expires_in", 3600))
+        _token["for"] = ident
         return _token["value"]
 
 

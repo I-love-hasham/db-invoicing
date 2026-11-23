@@ -2,6 +2,10 @@
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <h1>Dashboard</h1>
+{% if unemailed_alerts %}
+<div class="error">{{ unemailed_alerts }} security alert{{ '' if unemailed_alerts == 1 else 's' }} could not be emailed to you.
+  Review them in the red banner above and check <a href="{{ url_for('settings.email') }}">Settings → Email</a>.</div>
+{% endif %}
 {% if backups_left <= 3 %}
 <div class="notice">Only {{ backups_left }} 2FA backup codes left.
   <a href="{{ url_for('settings.backup_codes') }}">Generate new ones</a>.</div>
