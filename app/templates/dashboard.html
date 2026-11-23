@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+{% if backups_left <= 3 %}
+<div class="notice">Only {{ backups_left }} 2FA backup codes left.
+  <a href="{{ url_for('settings.backup_codes') }}">Generate new ones</a>.</div>
+{% endif %}
+<div class="stats">
+  <div class="stat"><div class="label">App version</div><div class="value">{{ version }}</div></div>
+  <div class="stat"><div class="label">Open vulnerabilities</div>
+    <div class="value">{% if not vulns.scanned %}<span class="muted">not scanned</span>{% elif vulns.vulns %}<span class="bad">{{ vulns.vulns|length }}</span>{% else %}<span class="ok">0</span>{% endif %}</div></div>
+  <div class="stat"><div class="label">Audit log integrity</div>
+    <div class="value">{% if chain_ok %}<span class="ok">Verified</span>{% else %}<span class="bad">FAILED</span>{% endif %}</div></div>
+  <div class="stat"><div class="label">Open security alerts</div>
+    <div class="value">{% if open_alerts %}<span class="bad">{{ open_alerts|length }}</span>{% else %}<span class="ok">0</span>{% endif %}</div></div>
+</div>
+<div class="card" style="margin-top:18px">
+  <h2>Coming next</h2>
+  <p class="muted">Clients, products, the timer and invoices are built on top of this secured foundation in the next steps.</p>
+</div>
+{% endblock %}

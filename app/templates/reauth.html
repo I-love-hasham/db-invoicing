@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Confirm it's you{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Confirm it's you</h1>
+  <p class="muted">This is a security setting, so enter a fresh code from your authenticator app.</p>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="code">Authenticator code (or a backup code)</label>
+    <input type="text" id="code" name="code" maxlength="11" required autofocus autocomplete="one-time-code">
+    <button type="submit">Verify</button>
+  </form>
+</div>
+{% endblock %}

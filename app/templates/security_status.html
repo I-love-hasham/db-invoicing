@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Security status{% endblock %}
+{% block content %}
+<h1>Security status</h1>
+<div class="card">
+  <table>
+    <tr><th colspan="2">App</th></tr>
+    <tr><td>Version</td><td>{{ version }}</td></tr>
+    <tr><td>Image built (last update)</td><td>{{ build_date }}</td></tr>
+    <tr><td>Python</td><td>{{ python_version }}</td></tr>
+    <tr><td>Audit log</td><td>{% if chain_ok %}<span class="ok">{{ chain_msg }}</span>{% else %}<span class="bad">{{ chain_msg }}</span>{% endif %}</td></tr>
+  </table>
+</div>
+<div class="card">
+  <h2>Open vulnerabilities (pip-audit)</h2>
+  {% if not vulns.scanned %}
+    <p class="muted">No scan report in this build. Rebuild the container to run pip-audit.</p>
+  {% else %}
+    <p class="muted">Scanned {{ vulns.scanned_at or 'at build time' }}.</p>
+    {% if vulns.vulns %}
+    <table>
+      <tr><th>Package</th><th>Installed</th><th>Advisory</th><th>Fixed in</th></tr>
+      {% for v in vulns.vulns %}<tr><td>{{ v.package }}</td><td>{{ v.version }}</td><td>{{ v.id }}</td><td>{{ v.fix }}</td></tr>{% endfor %}
+    </table>
+    {% else %}<p class="ok">No known vulnerabilities in Python dependencies.</p>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}DB IT Consulting{% endblock %} · Invoicing</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">DB IT Consulting</div>
+  {% if g.user and g.session and g.session.stage == 'full' %}
+  <nav>
+    <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+    <a href="{{ url_for('audit.index') }}">Audit log</a>
+    <a href="{{ url_for('main.security_status') }}">Security status</a>
+    <a href="{{ url_for('settings.index') }}">Settings</a>
+    <form method="post" action="{{ url_for('auth.logout') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="link">Sign out ({{ g.user.username }})</button>
+    </form>
+  </nav>
+  {% endif %}
+</header>
+
+{% for a in open_alerts %}
+<div class="alert-banner">
+  <div><strong>Security alert</strong> · {{ a.ts | localtime }} · {{ a.message }}</div>
+  <form method="post" action="{{ url_for('main.ack_alert', alert_id=a.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Acknowledge</button>
+  </form>
+</div>
+{% endfor %}
+
+<main>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
