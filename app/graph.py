@@ -14,15 +14,15 @@ import os
 import stat
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from flask import current_app
+
+from . import outbound
 
 LOGIN_HOST = "login.microsoftonline.com"
 GRAPH_HOST = "graph.microsoft.com"
@@ -31,16 +31,6 @@ TIMEOUT = 20
 MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024   # Graph's limit for a simple sendMail
 
 _token = {"value": None, "expires": 0.0, "for": None}
-
-
-class _NoRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise GraphError(f"Blocked: Microsoft answered with a redirect (HTTP {code}).")
-
-
-# No redirects (the token must never follow one to another host) and no proxy
-# picked up from environment variables.
-_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects())
 _token_lock = threading.Lock()
 
 
@@ -106,18 +96,11 @@ def client_assertion(tenant: str, client_id: str, key, cert, now: float | None =
 
 
 def _post(url: str, body: bytes, headers: dict) -> tuple[int, bytes]:
-    """HTTPS POST to an allow-listed Microsoft host only. TLS is verified (Python default)."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
-        raise GraphError("Blocked: not an allowed Microsoft address.")
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    """HTTPS POST to an allow-listed Microsoft host only (see outbound.py)."""
     try:
-        with _opener.open(req, timeout=TIMEOUT) as resp:     # nosec - host allow-listed above, no redirects
-            return resp.status, resp.read(65536)
-    except urllib.error.HTTPError as e:
-        return e.code, e.read(65536)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise GraphError(f"Couldn't reach Microsoft ({type(e).__name__}).")
+        return outbound.post(url, body, headers, ALLOWED_HOSTS, TIMEOUT)
+    except outbound.OutboundError as e:
+        raise GraphError(str(e))
 
 
 def _error_code(body: bytes) -> str:

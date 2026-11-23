@@ -102,7 +102,12 @@ def new():
     except (forms.FormError, invoicing.InvoiceProblem) as e:
         return render_template("invoices/new.html", clients=clients, f={**defaults, **args.to_dict()},
                                preview=None, error=str(e) if isinstance(e, invoicing.InvoiceProblem) else e.message), 400
-    preview = {
+    return render_template("invoices/new.html", clients=clients, f={**defaults, **args.to_dict()},
+                           preview=_build_preview(client, entries, lines, period_from, period_to, invoice_date))
+
+
+def _build_preview(client, entries, lines, period_from, period_to, invoice_date) -> dict:
+    return {
         "client": client, "entries": entries, "lines": lines,
         "total_cents": sum(l["amount_cents"] for l in lines),
         "fingerprint": invoicing.fingerprint(entries, lines),
@@ -110,7 +115,30 @@ def new():
         "next_number": invoicing.next_number(),
         "due_date": invoicing.due_date(invoice_date, client["payment_terms_days"]),
     }
-    return render_template("invoices/new.html", clients=clients, f={**defaults, **args.to_dict()}, preview=preview)
+
+
+@bp.route("/new/summary", methods=["POST"])
+def ai_summary():
+    """Suggest invoice notes (a short work summary) from the period's time-entry notes."""
+    from .. import ai
+    clients = _active_clients()
+    f = request.form.to_dict()
+    try:
+        client, period_from, period_to, invoice_date = _read_period(request.form)
+        entries = invoicing.billable_entries(client["id"], period_from, period_to)
+        if not entries:
+            raise forms.FormError("period_from", "No uninvoiced time for this client in that period.")
+        lines = invoicing.build_lines(client["id"], entries, period_from, period_to)
+    except (forms.FormError, invoicing.InvoiceProblem) as e:
+        return render_template("invoices/new.html", clients=clients, f=f, preview=None,
+                               error=str(e) if isinstance(e, invoicing.InvoiceProblem) else e.message), 400
+    preview = _build_preview(client, entries, lines, period_from, period_to, invoice_date)
+    raw = "\n".join(f"{e['work_date']}: {e['notes']}" for e in entries if e["notes"].strip())
+    try:
+        suggestion = ai.clean_up(raw, "summary", client_id=client["id"])
+    except ai.AIError as e:
+        return render_template("invoices/new.html", clients=clients, f=f, preview=preview, error=str(e)), 400
+    return render_template("invoices/new.html", clients=clients, f=f, preview=preview, suggested_notes=suggestion)
 
 
 @bp.route("/new", methods=["POST"])

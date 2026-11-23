@@ -204,3 +204,35 @@ def email_test():
         return render_template("settings/email.html", status=graph.status(), copy=mailer.copy_settings(),
                                send_token=mailer.new_send_token(), error=str(e)), 400
     return render_template("settings/done.html", message=f"Test email sent to {to}. Check your inbox.")
+
+
+# ---------------------------------------------------------------- AI note cleanup (Claude API)
+
+@bp.route("/ai")
+def ai_settings():
+    from .. import ai
+    return render_template("settings/ai.html", status=ai.key_status())
+
+
+@bp.route("/ai/key", methods=["GET", "POST"])
+@auth.fresh_2fa_required
+def ai_key():
+    from .. import ai
+    status = ai.key_status()
+    if request.method == "GET":
+        return render_template("settings/ai_key.html", status=status)
+    remove = request.form.get("remove") == "yes"
+    key = (request.form.get("api_key") or "").strip()
+    if not remove and not ai.valid_key_format(key):
+        return render_template("settings/ai_key.html", status=status,
+                               error="That doesn't look like a Claude API key (it starts with sk-ant-)."), 400
+    with atomic():
+        before = ai.key_status()
+        ai.save_key(None if remove else key)
+        after_desc = "removed" if remove else f"…{key[-4:]}"
+        before_desc = f"…{before['last4']}" if before["configured"] else "none"
+        audit.log("ai_key_changed", "settings", details={"before": {"key": before_desc}, "after": {"key": after_desc}})
+        audit.raise_alert("ai_key_changed", f"The Claude API key was {'removed' if remove else 'changed'} "
+                                            f"by {g.user['username']} from {g.ip}.")
+    return render_template("settings/done.html",
+                           message="API key removed." if remove else "API key saved (encrypted). AI cleanup is on.")
