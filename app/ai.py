@@ -106,7 +106,7 @@ _FIXED_FORMATS = [
     (re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "an API key"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "a sign-in token"),
     (re.compile(r"(?i)\b(?:password|pwd)\s*=\s*[^;\s]+"), "a password in a connection string"),
-    (re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@"), "a username:password in a web address"),
+    (re.compile(r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,20}://[^/\s:@]+:[^/\s@]+@"), "a username:password in a web address"),
     (re.compile(r"(?i)\b(?:seed|mnemonic|recovery)\s+(?:phrase|words)?\s*:?\s*(?:[a-z]+\s+){11,}[a-z]+"), "a seed/recovery phrase"),
     (re.compile(r"(?i)\b(?:root\s*[/ ]\s*calvin|admin\s*/\s*(?:admin|password|1234)|ubnt\s*/\s*ubnt|"
                 r"pi\s*/\s*raspberry|root\s*/\s*(?:root|toor))\b"), "a default username/password"),
