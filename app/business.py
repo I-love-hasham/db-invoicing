@@ -7,6 +7,7 @@ DEFAULTS = {
     "phone": "845-263-5628",
     "email": "",
     "footer": "Thank you for your business.",
+    "signature": "David",
 }
 FIELDS = tuple(DEFAULTS)
 

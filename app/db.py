@@ -76,7 +76,14 @@ def _migrate_audit(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log (client_id)")
 
 
-_MIGRATIONS = {"audit.db": _migrate_audit}
+def _migrate_app(conn: sqlite3.Connection) -> None:
+    """Upgrade app.db files created by earlier versions. Only ever adds columns."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+    if "paid_method" not in cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN paid_method TEXT")
+
+
+_MIGRATIONS = {"audit.db": _migrate_audit, "app.db": _migrate_app}
 
 
 def init_app(app):

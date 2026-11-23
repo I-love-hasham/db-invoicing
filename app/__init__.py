@@ -62,6 +62,15 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.jinja_env.filters["money_input"] = forms.cents_to_input
     app.jinja_env.filters["hours"] = forms.format_hours
 
+    import json as _json
+
+    @app.template_filter("client_name")
+    def _client_name(snapshot: str) -> str:
+        try:
+            return _json.loads(snapshot)["name"]
+        except (ValueError, KeyError, TypeError):
+            return ""
+
     from .views import (audit_views, auth_views, clients_views, invoices_views, main_views, products_views,
                         settings_views, time_views)
     for module in (auth_views, main_views, settings_views, audit_views, clients_views, products_views, time_views,

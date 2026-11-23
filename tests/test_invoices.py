@@ -197,7 +197,8 @@ def test_business_details_need_fresh_2fa_and_are_audited(client, app, clock):
         get_db().execute("UPDATE sessions SET reauth_at = reauth_at + 600")
     t = csrf(client, "/settings/business")
     client.post("/settings/business", data={"csrf_token": t, "name": "DB IT Consulting", "address": "x",
-                                            "phone": "845-263-5628", "email": "billing@dbit.example", "footer": "Thanks"})
+                                            "phone": "845-263-5628", "email": "billing@dbit.example", "footer": "Thanks",
+                                            "signature": "David"})
     d = _audit(app, "business_details_changed")[-1]["details"]
     assert "billing@dbit.example" in d
 

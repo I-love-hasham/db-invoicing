@@ -39,6 +39,31 @@
 </div>
 {% endif %}
 
+{% if inv.status == 'unpaid' %}
+<div class="card">
+  <h2>Record payment</h2>
+  <form method="post" action="{{ url_for('invoices.mark_paid', invoice_id=inv.id) }}" class="filters">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label for="paid_date">Date paid</label><input type="date" id="paid_date" name="paid_date" value="{{ today }}" required></div>
+    <div><label for="method">How</label><select id="method" name="method">
+      <option value="check">Check</option><option value="zelle">Zelle</option>
+      <option value="transfer">Bank transfer</option><option value="other">Other</option></select></div>
+    <div><button type="submit">Mark paid</button></div>
+  </form>
+</div>
+{% elif inv.status == 'paid' %}
+<div class="card">
+  <h2>Paid</h2>
+  <p class="ok">Paid {{ inv.paid_at }}{% if inv.paid_method %} by {{ {'check':'check','zelle':'Zelle','transfer':'bank transfer','other':'other'}[inv.paid_method] }}{% endif %}.</p>
+  <form method="post" action="{{ url_for('invoices.undo_paid', invoice_id=inv.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="undo_reason">Recorded by mistake? Reason</label>
+    <input type="text" id="undo_reason" name="reason" maxlength="300" required>
+    <button type="submit" class="secondary">Change back to unpaid</button>
+  </form>
+</div>
+{% endif %}
+
 {% if inv.status != 'void' %}
 <div class="card">
   <h2>Void this invoice</h2>

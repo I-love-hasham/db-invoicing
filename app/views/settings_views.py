@@ -126,6 +126,7 @@ def business_details():
             "phone": forms.text(request.form, "phone", "Phone", 40),
             "email": forms.email(request.form, "email", "Email"),
             "footer": forms.text(request.form, "footer", "Invoice footer", 140),
+            "signature": forms.text(request.form, "signature", "Name to sign emails with", 60, required=True),
         }
     except forms.FormError as e:
         return render_template("settings/business.html", b={**current, **request.form.to_dict()},

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Reminder for #{{ inv.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}">← Invoice #{{ inv.number }}</a></p>
+<div class="card">
+  <h1>{{ stage }}-day reminder — invoice #{{ inv.number }}</h1>
+  <p><strong>To:</strong> {{ msg.to or '(no billing email on file for this client)' }}</p>
+  <p><strong>Subject:</strong> {{ msg.subject }}</p>
+  <pre class="email">{{ msg.body }}</pre>
+  <p class="notice">Sending from billing@ is added in the email step. Until then you can copy this text into your own email.</p>
+</div>
+{% endblock %}

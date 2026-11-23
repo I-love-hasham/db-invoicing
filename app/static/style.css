@@ -55,3 +55,4 @@ button.link.dark { color: var(--forest); text-decoration: underline; font-size: 
 td input[type=text] { max-width: 140px; }
 .timer.running { border-left: 6px solid var(--gold); }
 button.secondary { background: #fff; color: var(--forest); border: 1px solid var(--forest); }
+pre.email { white-space: pre-wrap; font-family: inherit; background: #fbfbfa; border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
