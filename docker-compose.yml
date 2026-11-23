@@ -13,6 +13,8 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/data
+      # Microsoft 365 certificate (m365.pem), read-only. Folder: owner 10001, mode 700.
+      - ./secrets:/run/secrets:ro
     read_only: true
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=16m

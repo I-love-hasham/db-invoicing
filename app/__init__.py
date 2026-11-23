@@ -35,6 +35,8 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     db.init_app(app)
     security.init_app(app)
+    from . import mailer
+    mailer.init_app(app)
 
     try:
         tz = ZoneInfo(app.config["APP_TIMEZONE"])

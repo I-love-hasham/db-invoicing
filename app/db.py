@@ -81,6 +81,9 @@ def _migrate_app(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
     if "paid_method" not in cols:
         conn.execute("ALTER TABLE invoices ADD COLUMN paid_method TEXT")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(security_alerts)")}
+    if "email_attempts" not in cols:
+        conn.execute("ALTER TABLE security_alerts ADD COLUMN email_attempts INTEGER NOT NULL DEFAULT 0")
 
 
 _MIGRATIONS = {"audit.db": _migrate_audit, "app.db": _migrate_app}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Email{% endblock %}
+{% block content %}
+<h1>Email (Microsoft 365)</h1>
+<div class="card">
+  <h2>Sending from billing@</h2>
+  {% if status.configured %}
+    <p class="ok">Ready — sending as {{ status.sender }}.</p>
+    <p class="muted">Certificate expires {{ status.cert_expires }}. Renew it before then.</p>
+  {% else %}
+    <p class="bad">Not set up yet.</p>
+    <ul>
+      {% for m in status.missing %}<li>{{ m }} is missing in the server's .env file</li>{% endfor %}
+      {% if not status.cert_found %}<li>The certificate file isn't on the server yet</li>{% endif %}
+      {% if status.cert_problem %}<li>{{ status.cert_problem }}</li>{% endif %}
+    </ul>
+    <p class="muted">The app can only <strong>send</strong>, only from billing@. It can't read any mailbox.</p>
+  {% endif %}
+</div>
+<div class="card">
+  <h2>Email copy &amp; alerts</h2>
+  {% if copy.address %}
+    <p>Every outgoing email is {% if copy.enabled %}copied ({{ copy.mode | upper }}) to <strong>{{ copy.address }}</strong>{% else %}<strong>not</strong> copied (turned off){% endif %}.
+      Security alerts are emailed to {{ copy.address }}.</p>
+  {% else %}
+    <p class="bad">No copy/alert address set yet.</p>
+  {% endif %}
+  <p><a href="{{ url_for('settings.email_copy') }}">Change</a> <span class="muted">(asks for 2FA, raises an alert)</span></p>
+  {% if status.configured and copy.address %}
+  <form method="post" action="{{ url_for('settings.email_test') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="send_token" value="{{ send_token }}">
+    <button type="submit" class="secondary">Send a test email to {{ copy.address }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

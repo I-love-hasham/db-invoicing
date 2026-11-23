@@ -53,7 +53,7 @@ def dashboard():
     auth.sweep_rate_limits()
     vulns = vulnerability_report()
     chain_ok, _, _ = audit.verify_chain()
-    from .. import payments
+    from .. import mailer, payments
     from .time_views import _today, elapsed, running_timer
     timer = running_timer()
     today = _today()
@@ -61,6 +61,7 @@ def dashboard():
         "dashboard.html",
         timer=timer,
         money=payments.summary(today),
+        unemailed_alerts=mailer.unemailed_alert_count(),
         follow_ups=payments.due_follow_ups(today),
         timer_elapsed=elapsed(timer) if timer else None,
         vulns=vulns,

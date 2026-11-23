@@ -143,3 +143,64 @@ def business_details():
                               f"by {g.user['username']} from {g.ip}.")
     return render_template("settings/done.html",
                            message="Business details saved. They appear on invoices created from now on.")
+
+
+# ---------------------------------------------------------------- email (Microsoft 365)
+
+@bp.route("/email")
+def email():
+    from .. import graph, mailer
+    return render_template("settings/email.html", status=graph.status(), copy=mailer.copy_settings(),
+                           send_token=mailer.new_send_token())
+
+
+@bp.route("/email/copy", methods=["GET", "POST"])
+@auth.fresh_2fa_required
+def email_copy():
+    """The address that gets a copy of every outgoing email (and the security alerts)."""
+    from .. import forms, mailer
+    current = mailer.copy_settings()
+    if request.method == "GET":
+        return render_template("settings/email_copy.html", copy=current)
+    try:
+        address = forms.email(request.form, "address", "Copy address", required=True)
+        mode = forms.choice(request.form, "mode", "Copy type", ("cc", "bcc"))
+        enabled = request.form.get("enabled") == "1"
+    except forms.FormError as e:
+        return render_template("settings/email_copy.html", copy={**current, **request.form.to_dict()},
+                               error=e.message), 400
+    after = {"address": address, "mode": mode, "enabled": enabled}
+    with atomic():
+        before = mailer.copy_settings()
+        changed = [k for k in after if after[k] != before[k]]
+        if changed:
+            mailer.save_copy_settings(address, mode, enabled)
+            audit.log("email_copy_changed", "settings",
+                      details={"before": {k: before[k] for k in changed}, "after": {k: after[k] for k in changed}})
+            audit.raise_alert("email_copy_changed",
+                              f"The email copy / alert address setting was changed ({', '.join(changed)}) by "
+                              f"{g.user['username']} from {g.ip}. Address is now '{address}', "
+                              f"{mode.upper()}, {'on' if enabled else 'off'}.")
+    if changed and before["address"] and before["address"] != address:
+        # warn the OLD address too, in case someone else redirected the alerts
+        mailer.send_direct_alert(before["address"], f"The alert/copy address for your invoicing app was changed "
+                                                    f"from {before['address']} to {address} from {g.ip}.")
+    return render_template("settings/done.html", message="Email copy setting saved.")
+
+
+@bp.route("/email/test", methods=["POST"])
+def email_test():
+    from .. import graph, mailer
+    to = mailer.copy_settings()["address"]
+    if not to:
+        return render_template("settings/email.html", status=graph.status(), copy=mailer.copy_settings(),
+                               send_token=mailer.new_send_token(),
+                               error="Set the email copy address first — the test goes there."), 400
+    try:
+        mailer.send("test", request.form.get("send_token", ""), [to], "Test email from your invoicing app",
+                    "This is a test from your DB IT Consulting invoicing app. Email sending works.",
+                    add_copy=False)
+    except (mailer.SendRefused, graph.GraphError) as e:
+        return render_template("settings/email.html", status=graph.status(), copy=mailer.copy_settings(),
+                               send_token=mailer.new_send_token(), error=str(e)), 400
+    return render_template("settings/done.html", message=f"Test email sent to {to}. Check your inbox.")

@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     message          TEXT NOT NULL,
     acknowledged_at  TEXT,
     acknowledged_by  TEXT,
-    emailed_at       TEXT   -- filled once Microsoft Graph sending is built
+    emailed_at       TEXT,  -- when the alert email went out ('skipped' if too old when email was set up)
+    email_attempts   INTEGER NOT NULL DEFAULT 0
 );
 
 -- Small key/value store. 'audit_checkpoint' = highest audit entry ever written
@@ -184,3 +185,23 @@ CREATE TABLE IF NOT EXISTS follow_ups (
     sent_at     TEXT,
     UNIQUE (invoice_id, stage)
 );
+
+-- ---------------------------------------------------------------- email (Microsoft Graph)
+-- One row per send attempt. send_token is unique per Send click, so a double
+-- click can never send the same email twice. Message text is never stored here.
+CREATE TABLE IF NOT EXISTS email_log (
+    id            INTEGER PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('invoice', 'follow_up', 'test', 'alert')),
+    invoice_id    INTEGER REFERENCES invoices(id),
+    follow_up_id  INTEGER REFERENCES follow_ups(id),
+    to_addr       TEXT NOT NULL,
+    cc_addr       TEXT NOT NULL DEFAULT '',
+    bcc_addr      TEXT NOT NULL DEFAULT '',
+    subject       TEXT NOT NULL,
+    send_token    TEXT NOT NULL UNIQUE,
+    status        TEXT NOT NULL CHECK (status IN ('sending', 'sent', 'failed')),
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    sent_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_email_log_invoice ON email_log (invoice_id);

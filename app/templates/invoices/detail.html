@@ -20,14 +20,27 @@
   {% if vm.notes %}<p><strong>Notes:</strong> {{ vm.notes }}</p>{% endif %}
   {% if not inv.pdf_path %}<div class="notice">The PDF for this invoice wasn't created. Click Generate PDF below.</div>{% endif %}
   {% if inv.status == 'void' %}<p class="bad">Voided {{ inv.voided_at | localtime }} — {{ inv.void_reason }}</p>{% endif %}
+  {% if request.args.get('sent') %}<div class="notice">Invoice emailed.</div>{% endif %}
   <p>
     {% if inv.pdf_path %}<a class="button" href="{{ url_for('invoices.download_pdf', invoice_id=inv.id) }}">Download PDF</a>{% endif %}
+    {% if inv.status != 'void' %}<a class="button" href="{{ url_for('invoices.send_invoice', invoice_id=inv.id) }}">Email invoice…</a>{% endif %}
     {% if inv.status == 'unpaid' %}<a class="button" href="{{ url_for('invoices.edit', invoice_id=inv.id) }}">Edit date / notes</a>{% endif %}
   </p>
   <form method="post" action="{{ url_for('invoices.regenerate_pdf', invoice_id=inv.id) }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"> <button type="submit" class="secondary">{% if inv.pdf_path %}Regenerate PDF{% else %}Generate PDF{% endif %}</button>
   </form>
 </div>
+
+{% if emails %}
+<div class="card">
+  <h2>Emails</h2>
+  <table><tr><th>When</th><th>What</th><th>To</th><th>Copy</th><th>Result</th></tr>
+  {% for h in emails %}<tr><td>{{ h.created_at | localtime }}</td><td>{{ h.kind | replace('_', ' ') }}</td><td>{{ h.to_addr }}</td>
+    <td>{{ h.cc_addr }}{% if h.bcc_addr %} (BCC {{ h.bcc_addr }}){% endif %}</td>
+    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% elif h.status == 'sending' %}<span class="bad">unknown — check billing@ Sent Items</span>{% else %}<span class="bad">{{ h.status }}</span>{% endif %}</td></tr>{% endfor %}
+  </table>
+</div>
+{% endif %}
 
 {% if entries %}
 <div class="card">
