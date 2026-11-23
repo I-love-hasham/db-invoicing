@@ -345,6 +345,10 @@ def ai_cleanup(entry_id: int):
         products = [*products, {"id": entry["product_id"], "name": entry["product_name"] + " (archived)", "unit": ""}]
     values = {**dict(entry), "hours": forms.format_hours(entry["duration_seconds"])}
     _editable_or_400(entry)
+    # keep any unsaved changes on the form (date, hours, client, product) — only notes get the suggestion
+    for k in ("client_id", "product_id", "work_date", "hours"):
+        if request.form.get(k):
+            values[k] = request.form[k]
     notes = (request.form.get("notes") or entry["notes"]).strip()
     try:
         suggestion = ai.clean_up(notes, "entry", target=f"time:{entry_id}", client_id=entry["client_id"])

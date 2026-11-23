@@ -13,14 +13,14 @@ KEY = "sk-ant-api03-" + "A1b2C3d4E5f6G7h8I9j0" * 3
 
 class FakeClaude:
     def __init__(self, reply="Replaced failing drive on the file server and verified backups."):
-        self.reply, self.status, self.calls = reply, 200, []
+        self.reply, self.status, self.calls, self.stop = reply, 200, [], "end_turn"
 
     def __call__(self, url, body, headers, allowed_hosts, timeout=20):
         self.calls.append((url, json.loads(body), headers, allowed_hosts))
         if self.status != 200:
             return self.status, b'{"type":"error","error":{"type":"authentication_error"}}'
         return 200, json.dumps({"content": [{"type": "thinking", "thinking": "", "signature": "x"},
-                                            {"type": "text", "text": self.reply}],
+                                            {"type": "text", "text": self.reply}], "stop_reason": self.stop,
                                 "usage": {"input_tokens": 90, "output_tokens": 20}}).encode()
 
 
@@ -47,21 +47,35 @@ def _audit_dump(app):
         return " ".join(str(tuple(r)) for r in get_audit_db().execute("SELECT * FROM audit_log"))
 
 
-@pytest.mark.parametrize("text", [
-    "reset admin pw to Winter2026!", "Password: hunter22", "new wifi passphrase is CorrectHorse9",
-    "api key = abcd1234efgh", "token: eyJhbGciOi", "card 4111 1111 1111 1111 for licenses",
-    "-----BEGIN PRIVATE KEY----- abc", "set secret AbCdEfGhIjKlMnOpQrStUvWx1234",
-])
+BAD = ['pw Winter2026!','PIN 4821','creds admin/Passw0rd','login admin / Summer2026!','user jsmith temp pass Welcome1',
+'new password Spring2026# for jsmith','passwd Tr0ub4dor&3','local admin Hunter2!! set on DC01','wifi key Guest2026!',
+'WPA2 key: Fr0ntDesk','vpn psk 8f3Kq9','recovery key 123456-234567-345678-456789-567890-678901-789012-890123',
+'MFA code 482913','product key NPPR9-FWDCX-D2C8J-H872K-2YT43','AKIAIOSFODNN7EXAMPLE','routing 021000021 acct 123456789',
+'reset admin pw to Winter2026!','Password: hunter22','set it to Winter2026! for the user','card 4111 1111 1111 1111',
+'new wifi passphrase is CorrectHorse9','api key = abcd1234efgh','token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0',
+'pw is 1234','password=Summer25','wifi password: guest2026','gave user temp pw Welcome2026','otp 551203',
+'2FA code 019283','account 000123456789 for ACH','set local admin password to Adm1n!2026','creds: svc_backup / Bkp#2026']
+GOOD = ['Reset password to default for the front desk user',"User's password was reset and MFA re-registered",
+'Troubleshot password was expired issue','pin to taskbar for all users','token is expired, re-authenticated Outlook',
+"Reset John's password and enabled MFA",'replaced switch in server room','invoice 1205 for 43.32 hours',
+'called 845-263-5628 re printer','patched DC01 and FS02','installed Office365 on win11 laptop for user jsmith',
+'error code 1603 on MSI install','admin console on SRV-01 updated','created user account for new hire',
+'key fob reprogrammed','login issues with VPN, reset the client','registry key HKLM\\Software fixed',
+'user sarah locked out, unlocked account','set wifi to 5GHz band','renewed SSL cert for owa','configured 802.1x on switch',
+'password policy updated to 14 characters','enabled self-service password reset','wifi key rotated per policy',
+'admin rights removed from user','recovery partition rebuilt on laptop','set up user mailbox for Sarah Cohen',
+'pin pad replaced at front desk','user reported login loop in Teams','reset MFA for user, re-enrolled phone',
+'upgraded admin pc to Windows 11 24H2','moved user to OU=Staff','password expiry set to 90 days']
+
+
+@pytest.mark.parametrize("text", BAD)
 def test_secrets_are_caught(text):
-    assert ai.sensitive_reason(text)
+    assert ai.sensitive_reason(text), text
 
 
-@pytest.mark.parametrize("text", [
-    "Reset John's password and enabled MFA", "replaced switch in server room",
-    "invoice 1205 for 43.32 hours", "called 845-263-5628 re printer", "patched DC01 and FS02",
-])
+@pytest.mark.parametrize("text", GOOD)
 def test_normal_notes_pass(text):
-    assert ai.sensitive_reason(text) is None
+    assert ai.sensitive_reason(text) is None, (text, ai.sensitive_reason(text))
 
 
 def test_key_needs_2fa_is_encrypted_audited_and_alerts(client, app, clock):
@@ -172,6 +186,48 @@ def test_invoice_work_summary(client, app, clock, claude):
     page = r.get_data(as_text=True)
     assert r.status_code == 200 and "- Replaced failing drive" in page and "AI summary" in page
     sent = json.dumps(claude.calls[0][1])
-    assert "2026-11-02: swapped hdd" in sent and "OKG" not in sent
+    assert "swapped hdd" in sent and "2026-11-02" not in sent and "OKG" not in sent
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0   # nothing created
+
+
+def test_cut_off_reply_is_not_offered(client, app, clock, claude):
+    claude.stop = "max_tokens"
+    do_setup(client, app, clock)
+    _seed(client)
+    _save_key(client)
+    _entry(client, "did stuff")
+    t = csrf(client, "/time/1")
+    r = client.post("/time/1/ai", data={"csrf_token": t, "notes": "did stuff"})
+    assert r.status_code == 400 and "didn" in r.get_data(as_text=True)
+    assert claude.calls[0][1]["thinking"] == {"type": "disabled"}
+
+
+def test_blocked_message_shows_what_triggered_it(client, app, clock, claude):
+    do_setup(client, app, clock)
+    _seed(client)
+    _save_key(client)
+    _entry(client, "set wifi key Guest2026! on AP")
+    t = csrf(client, "/time/1")
+    page = client.post("/time/1/ai", data={"csrf_token": t, "notes": "set wifi key Guest2026! on AP"}).get_data(as_text=True)
+    assert "key Guest2026!" in page and claude.calls == []
+
+
+def test_unsaved_form_changes_are_kept(client, app, clock, claude):
+    do_setup(client, app, clock)
+    _seed(client)
+    _save_key(client)
+    _entry(client, "did stuff")
+    t = csrf(client, "/time/1")
+    page = client.post("/time/1/ai", data={"csrf_token": t, "notes": "did stuff", "hours": "3.25",
+                                           "work_date": "2026-11-04"}).get_data(as_text=True)
+    assert 'value="3.25"' in page and 'value="2026-11-04"' in page
+
+
+@pytest.mark.parametrize("url", ["https://:pw@api.anthropic.com/x", "https://api.anthropic.com:abc/x",
+                                 "https://x@api.anthropic.com/x", "https://api.anthropic.com:443/x",
+                                 "https://api.anthropic.com./x", "http://api.anthropic.com/x",
+                                 "https://api.anthropic.com.evil.com/x"])
+def test_outbound_blocks_odd_urls(url):
+    with pytest.raises(outbound.OutboundError):
+        outbound.post(url, b"", {}, {"api.anthropic.com"})

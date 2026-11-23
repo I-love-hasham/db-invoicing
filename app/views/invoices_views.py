@@ -133,7 +133,7 @@ def ai_summary():
         return render_template("invoices/new.html", clients=clients, f=f, preview=None,
                                error=str(e) if isinstance(e, invoicing.InvoiceProblem) else e.message), 400
     preview = _build_preview(client, entries, lines, period_from, period_to, invoice_date)
-    raw = "\n".join(f"{e['work_date']}: {e['notes']}" for e in entries if e["notes"].strip())
+    raw = "\n".join(f"- {e['notes']}" for e in entries if e["notes"].strip())   # notes only, no dates
     try:
         suggestion = ai.clean_up(raw, "summary", client_id=client["id"])
     except ai.AIError as e:

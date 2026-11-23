@@ -1,6 +1,7 @@
 """The only way the app talks to the internet: HTTPS POST to an allow-listed host,
 TLS verified, no redirects (credentials can never follow one elsewhere), and no
 proxy picked up from environment variables."""
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,8 +22,13 @@ opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirec
 
 
 def post(url: str, body: bytes, headers: dict, allowed_hosts: set[str], timeout: int = TIMEOUT) -> tuple[int, bytes]:
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts or parsed.username or parsed.port:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        raise OutboundError("Blocked: not a valid address.")
+    if (parsed.scheme != "https" or parsed.hostname not in allowed_hosts or "@" in parsed.netloc
+            or port is not None or parsed.netloc != parsed.hostname):
         raise OutboundError("Blocked: not an allowed address.")
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
@@ -32,5 +38,5 @@ def post(url: str, body: bytes, headers: dict, allowed_hosts: set[str], timeout:
         return e.code, e.read(65536)
     except OutboundError:
         raise
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, http.client.HTTPException, ValueError, TimeoutError, OSError) as e:
         raise OutboundError(f"Couldn't reach the service ({type(e).__name__}).")
