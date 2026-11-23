@@ -30,6 +30,9 @@
     <button type="submit">Save</button>
     {% if not is_new %}
     <button type="submit" formaction="{{ url_for('time.ai_cleanup', entry_id=entry.id) }}" class="secondary">✨ Clean up notes with AI</button>
+    <p class="ai-warning">⚠ <strong>AI button:</strong> sends these notes to Claude (Anthropic) to rewrite. Don't include passwords,
+      client personal or confidential information, or anything you wouldn't put on the invoice. Common passwords are
+      blocked automatically, but no filter catches everything. Nothing is sent until you click the button.</p>
     {% endif %}
   </form>
   {% if not is_new %}

@@ -56,3 +56,4 @@ td input[type=text] { max-width: 140px; }
 .timer.running { border-left: 6px solid var(--gold); }
 button.secondary { background: #fff; color: var(--forest); border: 1px solid var(--forest); }
 pre.email { white-space: pre-wrap; font-family: inherit; background: #fbfbfa; border: 1px solid var(--line); border-radius: 6px; padding: 14px; }
+.ai-warning { font-size: 13px; color: #6b4e12; background: #fbf5e8; border-left: 4px solid var(--gold); padding: 8px 12px; border-radius: 4px; margin: 10px 0 0; }

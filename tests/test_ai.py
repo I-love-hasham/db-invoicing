@@ -293,3 +293,12 @@ def test_unsaved_form_changes_are_kept(client, app, clock, claude):
 def test_outbound_blocks_odd_urls(url):
     with pytest.raises(outbound.OutboundError):
         outbound.post(url, b"", {}, {"api.anthropic.com"})
+
+
+def test_security_warning_shown_next_to_ai_buttons(client, app, clock, claude):
+    do_setup(client, app, clock)
+    _seed(client)
+    _save_key(client)
+    _entry(client, "did stuff")
+    assert "no filter catches everything" in client.get("/time/1").get_data(as_text=True)
+    assert "Security notice" in client.get("/settings/ai").get_data(as_text=True)

@@ -38,6 +38,9 @@
     <textarea id="notes" name="notes" rows="{{ 7 if suggested_notes else 3 }}" maxlength="2000">{{ suggested_notes or '' }}</textarea>
     <button type="submit">Create invoice #{{ preview.next_number }}</button>
     <button type="submit" formaction="{{ url_for('invoices.ai_summary') }}" class="secondary">✨ Write work summary from notes (AI)</button>
+    <p class="ai-warning">⚠ <strong>AI button:</strong> sends the notes of this period's time entries to Claude (Anthropic) to rewrite. Don't include passwords,
+      client personal or confidential information, or anything you wouldn't put on the invoice. Common passwords are
+      blocked automatically, but no filter catches everything. Nothing is sent until you click the button.</p>
   </form>
 </div>
 {% endif %}
