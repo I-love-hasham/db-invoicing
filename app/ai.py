@@ -197,7 +197,7 @@ def _normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)                     # full-width look-alikes -> plain
     text = re.sub(r"(?i)\bwi-?fi\b", "wifi", text)
     text = re.sub(r"->|\||[,;]|[\"'`]", " ", text)                   # separators and quotes
-    return re.sub(r"([A-Za-z0-9]+)([=:])(?=\S)", r"\1\2 ", text)    # password=X / pw:X
+    return re.sub(r"(?<=[A-Za-z0-9])([=:])(?=\S)", r"\1 ", text)    # password=X / pw:X (linear time)
 
 
 def sensitive_reason(text: str) -> tuple[str, str] | None:
