@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block content %}
+<h1>Clients</h1>
+<p><a class="button" href="{{ url_for('clients.new') }}">+ Add client</a>
+  {% if show_archived %}<a href="{{ url_for('clients.index') }}">Show active clients</a>
+  {% else %}<a href="{{ url_for('clients.index', archived=1) }}">Show archived clients</a>{% endif %}</p>
+{% if clients %}
+<table>
+  <tr><th>Name</th><th>Billing email</th><th>Terms</th><th></th></tr>
+  {% for c in clients %}
+  <tr><td><a href="{{ url_for('clients.detail', client_id=c.id) }}">{{ c.name }}</a></td>
+      <td>{{ c.email }}</td><td>Net {{ c.payment_terms_days }}</td>
+      <td>{% if c.archived_at %}<span class="muted">archived</span>{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="card"><p class="muted">{% if show_archived %}No archived clients.{% else %}No clients yet. Add your first one.{% endif %}</p></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('clients.index') }}">← All clients</a></p>
+<h1>{{ client.name }}{% if client.archived_at %} <span class="muted">(archived)</span>{% endif %}</h1>
+{% if request.args.get('saved') %}<div class="notice">Saved.</div>{% endif %}
+
+<div class="card">
+  <h2>Details</h2>
+  {% if client.archived_at %}
+    <p class="muted">This client is archived. Restore it to make changes.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('clients.detail', client_id=client.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="name">Client name</label>
+    <input type="text" id="name" name="name" value="{{ client.name or '' }}" required maxlength="100">
+    <label for="address">Address</label>
+    <textarea id="address" name="address" rows="3" maxlength="500">{{ client.address or '' }}</textarea>
+    <label for="email">Billing email (invoices are sent here)</label>
+    <input type="text" id="email" name="email" value="{{ client.email or '' }}" maxlength="254" inputmode="email">
+    <label for="payment_terms_days">Payment terms (days) — 15 = Net 15</label>
+    <input type="text" id="payment_terms_days" name="payment_terms_days" value="{{ client.payment_terms_days if client.payment_terms_days is not none else 15 }}" inputmode="numeric" maxlength="3" required>
+    <label for="notes">Notes (not on invoices — never put passwords or credentials here; those belong in IT Glue)</label>
+    <textarea id="notes" name="notes" rows="2" maxlength="2000">{{ client.notes or '' }}</textarea>
+    <button type="submit">Save changes</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card" id="rates">
+  <h2>Rates for this client</h2>
+  <p class="muted">Leave blank to use the product's default rate. The "Billed at" column is what invoices will use.</p>
+  {% if rates %}
+  <form method="post" action="{{ url_for('clients.rates', client_id=client.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <table>
+      <tr><th>Product</th><th>Default rate</th><th>This client's rate</th><th>Billed at</th></tr>
+      {% for r in rates %}
+      <tr><td>{{ r.name }}{% if r.archived_at %} <span class="muted">(archived)</span>{% endif %}</td>
+          <td>{{ r.default_rate_cents | money }} / {{ r.unit }}</td>
+          <td>{% if client.archived_at or r.archived_at %}{{ r.client_rate_cents | money }}{% else %}
+              <input type="text" name="rate_{{ r.id }}" value="{{ r.client_rate_cents | money_input }}" inputmode="decimal" maxlength="12" placeholder="default">{% endif %}</td>
+          <td>{% if r.effective_cents is none %}<span class="bad">no rate set</span>{% else %}{{ r.effective_cents | money }}{% endif %}</td></tr>
+      {% endfor %}
+    </table>
+    {% if not client.archived_at %}<button type="submit">Save rates</button>{% endif %}
+  </form>
+  {% else %}
+  <p class="muted">No products yet. <a href="{{ url_for('products.new') }}">Add products</a> first (e.g. Regular Hours).</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Activity</h2>
+  <p><a href="{{ url_for('audit.index', client=client.id) }}">View this client's audit log</a></p>
+  {% if client.archived_at %}
+  <form method="post" action="{{ url_for('clients.restore', client_id=client.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Restore client</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('clients.archive', client_id=client.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p class="muted">Archiving hides the client from new work. Nothing is deleted, and it raises a security alert.</p>
+    <button type="submit" class="danger">Archive client</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

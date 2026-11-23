@@ -68,6 +68,17 @@ def _close(exc=None):
         audit_conn.close()
 
 
+def _migrate_audit(conn: sqlite3.Connection) -> None:
+    """Upgrade audit.db files created by earlier versions. Only ever adds columns."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)")}
+    if "client_id" not in cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN client_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log (client_id)")
+
+
+_MIGRATIONS = {"audit.db": _migrate_audit}
+
+
 def init_app(app):
     data_dir = app.config["DATA_DIR"]
     os.makedirs(data_dir, mode=0o700, exist_ok=True)
@@ -77,6 +88,8 @@ def init_app(app):
         try:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript((_HERE / schema).read_text())
+            if db_name in _MIGRATIONS:
+                _MIGRATIONS[db_name](conn)
         finally:
             conn.close()
         os.chmod(path, 0o600)

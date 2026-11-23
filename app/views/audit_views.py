@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from flask import Blueprint, Response, render_template, request
 
 from .. import audit
-from ..db import get_audit_db
+from ..db import get_audit_db, get_db
 
 bp = Blueprint("audit", __name__, url_prefix="/audit")
 PAGE_SIZE = 100
@@ -26,6 +26,7 @@ def _filters():
         "category": args.get("category", "").strip(),
         "outcome": args.get("outcome", "").strip(),
         "q": args.get("q", "").strip()[:100],
+        "client": args.get("client", "").strip(),
     }
     where, params = [], []
     for key, op in (("date_from", ">="), ("date_to", "<")):
@@ -52,6 +53,11 @@ def _filters():
         params.append(f["outcome"])
     else:
         f["outcome"] = ""
+    if f["client"].isascii() and f["client"].isdigit():
+        where.append("client_id = ?")
+        params.append(int(f["client"]))
+    else:
+        f["client"] = ""
     if f["q"]:
         like = f"%{_like_escape(f['q'])}%"
         where.append("(action LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR details LIKE ? ESCAPE '\\'"
@@ -72,8 +78,9 @@ def index():
     total = conn.execute(f"SELECT COUNT(*) AS n FROM audit_log{clause}", params).fetchone()["n"]
     rows = conn.execute(f"SELECT * FROM audit_log{clause} ORDER BY id DESC LIMIT ? OFFSET ?",
                         [*params, PAGE_SIZE, (page - 1) * PAGE_SIZE]).fetchall()
+    clients = get_db().execute("SELECT id, name FROM clients ORDER BY name").fetchall()
     return render_template("audit.html", rows=rows, f=f, page=page, total=total,
-                           pages=max(1, -(-total // PAGE_SIZE)), categories=audit.CATEGORIES)
+                           pages=max(1, -(-total // PAGE_SIZE)), categories=audit.CATEGORIES, clients=clients)
 
 
 def _csv_safe(value) -> str:
@@ -88,7 +95,7 @@ def export_csv():
     rows = get_audit_db().execute(f"SELECT * FROM audit_log{clause} ORDER BY id", params).fetchall()
     out = io.StringIO()
     writer = csv.writer(out)
-    cols = ["id", "ts", "username", "ip", "user_agent", "category", "action", "target", "outcome",
+    cols = ["id", "ts", "username", "ip", "user_agent", "category", "action", "target", "client_id", "outcome",
             "details", "entry_hash"]
     writer.writerow(cols)
     for r in rows:

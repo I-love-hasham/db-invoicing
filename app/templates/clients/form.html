@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Add client{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Add client</h1>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="name">Client name</label>
+    <input type="text" id="name" name="name" value="{{ client.name or '' }}" required maxlength="100">
+    <label for="address">Address</label>
+    <textarea id="address" name="address" rows="3" maxlength="500">{{ client.address or '' }}</textarea>
+    <label for="email">Billing email (invoices are sent here)</label>
+    <input type="text" id="email" name="email" value="{{ client.email or '' }}" maxlength="254" inputmode="email">
+    <label for="payment_terms_days">Payment terms (days) — 15 = Net 15</label>
+    <input type="text" id="payment_terms_days" name="payment_terms_days" value="{{ client.payment_terms_days if client.payment_terms_days is not none else 15 }}" inputmode="numeric" maxlength="3" required>
+    <label for="notes">Notes (not on invoices — never put passwords or credentials here; those belong in IT Glue)</label>
+    <textarea id="notes" name="notes" rows="2" maxlength="2000">{{ client.notes or '' }}</textarea>
+    <button type="submit">Save client</button>
+  </form>
+</div>
+{% endblock %}
