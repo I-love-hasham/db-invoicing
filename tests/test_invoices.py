@@ -179,7 +179,7 @@ def test_pdf_renders_unusual_text():
           "due_date": "11/27/26", "period": "10/29/26 – 11/06/26", "terms": "Net 15",
           "client": {"name": "Café Ünïcode 😀 שלום", "address": "line1\nline2", "email": "a@b.co",
                      "payment_terms_days": 15},
-          "business": {"name": "DB IT Consulting", "address": "74 North Cole Avenue\nSpring Valley, NY 10977",
+          "business": {"name": "DB IT Consulting", "address": "3 Crestview Terrace\nMonsey, NY 10952",
                        "phone": "845-263-5628", "email": "", "footer": "Thanks"},
           "notes": "x" * 3000, "lines": [{"description": "Regular Hours, IT services, 10/29/26 – 11/06/26",
                                           "hours": "43.32", "rate_cents": 7718, "amount_cents": 334344}],

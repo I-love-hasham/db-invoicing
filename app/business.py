@@ -3,7 +3,7 @@ from .db import get_db
 
 DEFAULTS = {
     "name": "DB IT Consulting",
-    "address": "74 North Cole Avenue\nSpring Valley, NY 10977",
+    "address": "3 Crestview Terrace\nMonsey, NY 10952",
     "phone": "845-263-5628",
     "email": "",
     "footer": "Thank you for your business.",
