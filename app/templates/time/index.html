@@ -12,7 +12,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ timer.updated_at }}">
     <label for="notes">Notes (what you're working on)</label>
-    <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ timer.notes }}</textarea>
+    <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ typed_notes if typed_notes is not none else timer.notes }}</textarea>
     <button type="submit" formaction="{{ url_for('time.save_timer_notes') }}" class="secondary">Save notes</button>
     <button type="submit" class="danger">Stop timer</button>
   </form>

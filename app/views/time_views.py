@@ -118,7 +118,7 @@ def index():
     return _render_index()
 
 
-def _render_index(error: str | None = None, status: int = 200):
+def _render_index(error: str | None = None, status: int = 200, typed_notes: str | None = None):
     args = request.args
     today = date.fromisoformat(_today())
     week_start = today - timedelta(days=today.weekday())
@@ -149,6 +149,7 @@ def _render_index(error: str | None = None, status: int = 200):
         "time/index.html", entries=entries, total=total, clients=clients, products=products,
         all_clients=all_clients, timer=timer, elapsed=elapsed(timer) if timer else None,
         f={"from": date_from, "to": date_to, "client": client_filter}, error=error,
+        typed_notes=typed_notes,
     ), status
 
 
@@ -199,8 +200,9 @@ def _finish_or_save(stop: bool):
             return redirect(url_for("time.index"))
         if request.form.get("version") != timer["updated_at"]:
             # notes were saved from another tab/device since this page loaded
-            return _index_with_error("These notes were changed somewhere else. Your text wasn't saved — "
-                                     "copy it, reload the page, and try again.")
+            return _render_index(error="These notes were also changed somewhere else. Below is the text you "
+                                       "typed — check it, then Save or Stop again.",
+                                 status=400, typed_notes=notes)
         if not stop:
             if notes != timer["notes"]:
                 db.execute("UPDATE time_entries SET notes = ?, updated_at = ? WHERE id = ?",
@@ -298,6 +300,11 @@ def edit(entry_id: int):
                  "product": product["name"].removesuffix(" (archived)"), "date": work_date,
                  "hours": forms.format_hours(seconds), "notes": notes}
         changed = [k for k in after if before[k] != after[k]]
+        if seconds != current["duration_seconds"] and "hours" not in changed:
+            # same 2-decimal display, different exact time: still a change, logged in seconds
+            changed.append("hours")
+            before["hours"] = f"{before['hours']} ({current['duration_seconds']} s)"
+            after["hours"] = f"{after['hours']} ({seconds} s)"
         if changed:
             db.execute("UPDATE time_entries SET client_id = ?, product_id = ?, work_date = ?, duration_seconds = ?,"
                        " notes = ?, updated_at = ? WHERE id = ?",

@@ -243,3 +243,30 @@ def test_stale_tab_cannot_overwrite_notes(client, app, clock):
     assert r.status_code == 400
     with app.app_context():
         assert get_db().execute("SELECT notes FROM time_entries").fetchone()[0] == "saved from phone"
+
+
+def test_stale_tab_error_keeps_typed_text(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    _start(client, "first")
+    old_tab = _form(client)
+    client.post("/time/timer/notes", data={**_form(client), "notes": "saved from phone"})
+    r = client.post("/time/stop", data={**old_tab, "notes": "my long typed notes"})
+    assert r.status_code == 400 and "my long typed notes" in r.get_data(as_text=True)
+    assert client.post("/time/timer/notes", data={**_form(client), "notes": "merged"}).status_code == 302
+
+
+def test_same_display_different_seconds_is_audited(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    t = csrf(client, "/time/new")
+    client.post("/time/new", data={"csrf_token": t, "client_id": "1", "product_id": "1",
+                                   "work_date": "2026-11-02", "hours": "1", "notes": ""})
+    with app.app_context():
+        get_db().execute("UPDATE time_entries SET duration_seconds = 26459")
+    t = csrf(client, "/time/1")
+    client.post("/time/1", data={"csrf_token": t, "client_id": "1", "product_id": "1",
+                                 "work_date": "2026-11-02", "hours": "7:21", "notes": ""})
+    assert _entries(app)[0]["duration_seconds"] == 26460
+    d = _audit(app, "time_entry_edited")[-1]["details"]
+    assert "26459 s" in d and "26460 s" in d
