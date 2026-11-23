@@ -6,6 +6,7 @@ Rules (from the spec):
 - every send is in the audit log (recipients, subject, time — never the message text);
 - one Send click = at most one email (unique send token, claimed under the lock).
 """
+import math
 import os
 import re
 import secrets
@@ -157,6 +158,8 @@ def flush_alerts() -> None:
             try:
                 taken = float(r["emailed_at"].split(":")[1])
             except (IndexError, ValueError):
+                taken = 0
+            if not math.isfinite(taken):
                 taken = 0
             if now - taken > CLAIM_TTL:
                 db.execute("UPDATE security_alerts SET emailed_at = NULL WHERE id = ?", (r["id"],))

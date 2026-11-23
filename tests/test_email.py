@@ -84,7 +84,8 @@ def _send_form(client, path):
     html = client.get(path).get_data(as_text=True)
     return {"csrf_token": re.search(r'name="csrf_token" value="([^"]+)"', html).group(1),
             "send_token": re.search(r'name="send_token" value="([^"]+)"', html).group(1),
-            "body": re.search(r'<textarea id="body" name="body"[^>]*>(.*?)</textarea>', html, re.S).group(1)}
+            "body": re.search(r'<textarea id="body" name="body"[^>]*>(.*?)</textarea>', html, re.S).group(1),
+            **({"shown_status": m.group(1)} if (m := re.search(r'name="shown_status" value="([^"]+)"', html)) else {})}
 
 
 # ---------------------------------------------------------------- the Microsoft sign-in itself
@@ -413,3 +414,15 @@ def test_old_alerts_skipped_only_when_email_first_set_up(client, app, clock, ms)
     _flush(app)                                   # ...and is still sent, not skipped
     assert ms.sends()
     assert "could not be emailed" in client.get("/").get_data(as_text=True)   # the skipped ones are flagged
+
+
+def test_paid_after_preview_opened_is_refused(client, app, clock, ms):
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    form = _send_form(client, "/invoices/1/send")          # opened while unpaid ("payment is due")
+    t = csrf(client, "/invoices/1")
+    client.post("/invoices/1/paid", data={"csrf_token": t, "paid_date": "2026-11-20", "method": "check"})
+    r = client.post("/invoices/1/send", data=form)
+    assert r.status_code == 400 and "changed" in r.get_data(as_text=True) and ms.sends() == []

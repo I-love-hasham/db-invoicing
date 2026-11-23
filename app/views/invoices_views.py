@@ -423,13 +423,15 @@ def send_invoice(invoice_id: int):
         return render_template("invoices/send.html", body=request.form.get("body", ""),
                                send_token=request.form.get("send_token", ""), error=e.message, **ctx), 400
 
+    shown_status = request.form.get("shown_status", "")    # status when the preview was opened
+
     def recheck(db):
         current = db.execute("SELECT status FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
         if current["status"] == "void":
             raise mailer.SendRefused("This invoice was voided.")
-        if current["status"] != inv["status"]:
-            raise mailer.SendRefused("This invoice changed (paid/unpaid) while you were writing. Reload and check "
-                                     "the message.")
+        if current["status"] != shown_status:
+            raise mailer.SendRefused("This invoice changed (paid/unpaid) since this page was opened. Reload and "
+                                     "check the message before sending.")
     try:
         pdf_bytes = _verified_pdf(inv)
         mailer.send("invoice", request.form.get("send_token", ""), [to], defaults["subject"], body, invoice=inv,

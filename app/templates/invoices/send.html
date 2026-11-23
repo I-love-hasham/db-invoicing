@@ -14,6 +14,7 @@
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="send_token" value="{{ send_token }}">
+    <input type="hidden" name="shown_status" value="{{ inv.status }}">
     <label for="body">Message</label>
     <textarea id="body" name="body" rows="9" maxlength="5000" required>{{ body }}</textarea>
     {% if already_sent %}<label><input type="checkbox" name="resend" value="yes"> This invoice was already emailed — send it again</label>{% endif %}
