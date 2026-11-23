@@ -127,3 +127,28 @@ def test_upgrade_adds_paid_method_column(tmp_path):
     create_app(cfg)
     conn = sqlite3.connect(tmp_path / "data" / "app.db")
     assert "paid_method" in [r[1] for r in conn.execute("PRAGMA table_info(invoices)")]
+
+
+def test_paid_invoice_cannot_be_voided_or_rebilled(client, app, clock):
+    _invoice(client, app, clock)
+    t = csrf(client, "/invoices/1")
+    client.post("/invoices/1/paid", data={"csrf_token": t, "paid_date": "2026-11-20", "method": "zelle"})
+    assert "Void this invoice" not in client.get("/invoices/1").get_data(as_text=True)
+    client.post("/invoices/1/void", data={"csrf_token": t, "reason": "x", "confirm": "yes"})
+    with app.app_context():
+        assert get_db().execute("SELECT status FROM invoices").fetchone()[0] == "paid"
+        assert get_db().execute("SELECT COUNT(*) FROM time_entries WHERE invoice_id IS NULL").fetchone()[0] == 0
+    assert "No uninvoiced time" in client.get(
+        "/invoices/new?client_id=1&period_from=2026-10-29&period_to=2026-11-06&invoice_date=2026-11-12"
+    ).get_data(as_text=True)
+
+
+def test_no_reminder_page_for_paid_invoice(client, app, clock):
+    from datetime import date, timedelta
+    _invoice(client, app, clock)
+    _set_due(app, (date.today() - timedelta(days=8)).isoformat())
+    client.get("/")
+    assert client.get("/invoices/1/follow-up/7").status_code == 200
+    t = csrf(client, "/invoices/1")
+    client.post("/invoices/1/paid", data={"csrf_token": t, "paid_date": date.today().isoformat(), "method": "check"})
+    assert client.get("/invoices/1/follow-up/7").status_code == 404

@@ -54,7 +54,7 @@
 {% elif inv.status == 'paid' %}
 <div class="card">
   <h2>Paid</h2>
-  <p class="ok">Paid {{ inv.paid_at }}{% if inv.paid_method %} by {{ {'check':'check','zelle':'Zelle','transfer':'bank transfer','other':'other'}[inv.paid_method] }}{% endif %}.</p>
+  <p class="ok">Paid {{ inv.paid_at }}{% if inv.paid_method %} by {{ {'check':'check','zelle':'Zelle','transfer':'bank transfer','other':'other'}.get(inv.paid_method, 'other') }}{% endif %}.</p>
   <form method="post" action="{{ url_for('invoices.undo_paid', invoice_id=inv.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="undo_reason">Recorded by mistake? Reason</label>
@@ -64,7 +64,7 @@
 </div>
 {% endif %}
 
-{% if inv.status != 'void' %}
+{% if inv.status == 'unpaid' %}
 <div class="card">
   <h2>Void this invoice</h2>
   <p class="muted">The invoice stays on record marked VOID, its time is released so it can be billed again,

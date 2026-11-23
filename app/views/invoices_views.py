@@ -265,7 +265,9 @@ def void(invoice_id: int):
                                entries=[], error=e.message), 400
     with atomic() as db:
         inv, _ = _get(invoice_id)
-        if inv["status"] == "void":
+        if inv["status"] != "unpaid":
+            # a paid invoice can't be voided (its time would become billable again);
+            # change it back to unpaid first — that needs a reason and raises an alert
             return redirect(url_for("invoices.detail", invoice_id=invoice_id))
         released = db.execute("UPDATE time_entries SET invoice_id = NULL WHERE invoice_id = ?", (invoice_id,)).rowcount
         now = audit.utcnow_iso()
@@ -340,6 +342,8 @@ def follow_up(invoice_id: int, stage: int):
     if stage not in payments.FOLLOW_UP_STAGES:
         abort(404)
     inv, _ = _get(invoice_id)
+    if inv["status"] != "unpaid":
+        abort(404)       # paid or void: no reminder (the future Send re-checks this under the lock)
     row = get_db().execute("SELECT * FROM follow_ups WHERE invoice_id = ? AND stage = ?",
                            (invoice_id, stage)).fetchone()
     if row is None:
