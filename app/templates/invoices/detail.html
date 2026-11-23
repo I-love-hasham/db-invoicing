@@ -18,6 +18,7 @@
     {% endfor %}
   </table>
   {% if vm.notes %}<p><strong>Notes:</strong> {{ vm.notes }}</p>{% endif %}
+  {% if not inv.pdf_path %}<div class="notice">The PDF for this invoice wasn't created. Click Generate PDF below.</div>{% endif %}
   {% if inv.status == 'void' %}<p class="bad">Voided {{ inv.voided_at | localtime }} — {{ inv.void_reason }}</p>{% endif %}
   <p>
     {% if inv.pdf_path %}<a class="button" href="{{ url_for('invoices.download_pdf', invoice_id=inv.id) }}">Download PDF</a>{% endif %}

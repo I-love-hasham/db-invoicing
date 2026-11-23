@@ -205,3 +205,58 @@ def test_business_details_need_fresh_2fa_and_are_audited(client, app, clock):
 def test_pages_need_login(client):
     for p in ("/invoices/", "/invoices/new", "/invoices/1", "/invoices/1/pdf"):
         assert client.get(p).status_code == 302
+
+
+# ---------------------------------------------------------------- review findings
+
+def test_rate_change_after_preview_sends_back_to_preview(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    html = _preview(client).get_data(as_text=True)
+    form = dict(re.findall(r'<input type="hidden" name="([a-z_]+)" value="([^"]*)"', html))
+    client.post("/clients/1/rates", data={"csrf_token": csrf(client, "/clients/1"), "rate_1": "99.99"})
+    r = client.post("/invoices/new", data={**form, "notes": ""})
+    assert "changed=1" in r.headers["Location"]
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
+
+
+def test_parallel_pdf_writes_stay_consistent(client, app, clock):
+    import threading
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    cookie = client.get_cookie("dbinv").value
+    clients = []
+    for _ in range(4):
+        c = app.test_client()
+        c.set_cookie("dbinv", cookie)
+        clients.append((c, csrf(c, "/invoices/1")))
+    barrier = threading.Barrier(4)
+    codes = []
+
+    def go(c, t):
+        barrier.wait()
+        codes.append(c.post("/invoices/1/pdf", data={"csrf_token": t}).status_code)
+    ts = [threading.Thread(target=go, args=x) for x in clients]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert codes == [302] * 4
+    assert client.get("/invoices/1/pdf").status_code == 200        # no false tamper alert
+    folder = os.path.join(app.config["DATA_DIR"], "Invoices", "OKG Tech", "2026")
+    assert sorted(os.listdir(folder)) == ["Invoice-1205.pdf"]       # no leftover temp files
+
+
+def test_moving_invoice_to_another_year_removes_old_pdf(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client)
+    _time(client, "2026-11-02", "2")
+    _create(client)
+    t = csrf(client, "/invoices/1/edit")
+    client.post("/invoices/1/edit", data={"csrf_token": t, "invoice_date": "2027-01-02", "notes": ""})
+    base = os.path.join(app.config["DATA_DIR"], "Invoices", "OKG Tech")
+    assert not os.path.exists(os.path.join(base, "2026", "Invoice-1205.pdf"))
+    assert os.path.exists(os.path.join(base, "2027", "Invoice-1205.pdf"))
+    assert client.get("/invoices/1/pdf").status_code == 200

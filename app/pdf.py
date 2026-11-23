@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 import re
+import tempfile
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import simpleSplit
@@ -176,9 +177,22 @@ def save(data_dir: str, client_name: str, year: str, number: int, pdf_bytes: byt
     if not full.startswith(base + os.sep):
         raise ValueError("invoice path escapes the data folder")
     os.makedirs(os.path.dirname(full), mode=0o700, exist_ok=True)
-    tmp = full + ".tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(pdf_bytes)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, full)   # atomic: never a half-written PDF
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(full), prefix=".tmp-", suffix=".pdf")   # unique, 0600
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(pdf_bytes)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, full)   # atomic: never a half-written PDF
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     return rel, hashlib.sha256(pdf_bytes).hexdigest()
+
+
+def remove(data_dir: str, rel: str) -> None:
+    base = os.path.realpath(data_dir)
+    full = os.path.realpath(os.path.join(base, rel))
+    if full.startswith(base + os.sep) and os.path.isfile(full):
+        os.remove(full)

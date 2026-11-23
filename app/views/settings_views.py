@@ -137,5 +137,8 @@ def business_details():
             business.save_details(values)
             audit.log("business_details_changed", "settings",
                       details={"before": {k: before[k] for k in changed}, "after": {k: values[k] for k in changed}})
+            audit.raise_alert("business_details_changed",
+                              f"The business details printed on invoices were changed ({', '.join(changed)}) "
+                              f"by {g.user['username']} from {g.ip}.")
     return render_template("settings/done.html",
                            message="Business details saved. They appear on invoices created from now on.")

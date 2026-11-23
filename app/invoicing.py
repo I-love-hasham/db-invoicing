@@ -44,9 +44,11 @@ def rate_for(client_id: int, product_id: int) -> int | None:
     return row["rate"]
 
 
-def entries_fingerprint(entries) -> str:
-    """Identifies exactly which entries (and their durations) a preview showed."""
+def fingerprint(entries, lines) -> str:
+    """Identifies exactly what a preview showed: which entries, and every line's rate and amount.
+    If anything differs at Create time, David is sent back to a fresh preview."""
     raw = ",".join(f"{e['id']}:{e['duration_seconds']}:{e['product_id']}" for e in entries)
+    raw += "|" + ",".join(f"{l['description']}:{l['seconds']}:{l['rate_cents']}:{l['amount_cents']}" for l in lines)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

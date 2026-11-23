@@ -44,16 +44,23 @@ def _read_period(values):
 
 
 def _write_pdf(invoice_id: int, action: str) -> None:
-    """(Re)generate the PDF from the stored invoice and record its fingerprint."""
-    inv, lines = invoicing.load(invoice_id)
-    vm = invoicing.view_model(inv, lines, _today())
-    data = pdf.render(vm)
-    client_name = json.loads(inv["client_snapshot"])["name"]
-    rel, digest = pdf.save(current_app.config["DATA_DIR"], client_name, inv["invoice_date"][:4], inv["number"], data)
+    """(Re)generate the PDF and record its fingerprint. Everything happens under the
+    write lock, so two clicks can't interleave: the recorded hash is always the file kept."""
+    data_dir = current_app.config["DATA_DIR"]
     with atomic() as db:
+        inv, lines = invoicing.load(invoice_id)
+        vm = invoicing.view_model(inv, lines, _today())
+        client_name = json.loads(inv["client_snapshot"])["name"]
+        rel, digest = pdf.save(data_dir, client_name, inv["invoice_date"][:4], inv["number"], pdf.render(vm))
         db.execute("UPDATE invoices SET pdf_path = ?, pdf_sha256 = ? WHERE id = ?", (rel, digest, invoice_id))
+        details = {"file": rel, "sha256": digest}
+        old = inv["pdf_path"]
+        if old and old != rel:
+            # e.g. invoice date moved to another year: don't leave a stale copy behind
+            pdf.remove(data_dir, old)
+            details["removed_old_file"] = old
         audit.log(action, "invoices", target=f"invoice:{inv['number']}", client_id=inv["client_id"],
-                  details={"file": rel, "sha256": digest})
+                  details=details)
 
 
 # ---------------------------------------------------------------- list
@@ -90,7 +97,7 @@ def new():
     preview = {
         "client": client, "entries": entries, "lines": lines,
         "total_cents": sum(l["amount_cents"] for l in lines),
-        "fingerprint": invoicing.entries_fingerprint(entries),
+        "fingerprint": invoicing.fingerprint(entries, lines),
         "running_timer": invoicing.running_timer_in_period(client["id"], period_from, period_to),
         "next_number": invoicing.next_number(),
         "due_date": invoicing.due_date(invoice_date, client["payment_terms_days"]),
@@ -112,10 +119,10 @@ def create():
     try:
         with atomic() as db:
             entries = invoicing.billable_entries(client["id"], period_from, period_to)   # under the lock
-            if not entries or invoicing.entries_fingerprint(entries) != request.form.get("fingerprint"):
-                # time changed since the preview: show the new preview instead of guessing
+            lines = invoicing.build_lines(client["id"], entries, period_from, period_to) if entries else []
+            if not entries or invoicing.fingerprint(entries, lines) != request.form.get("fingerprint"):
+                # time or rates changed since the preview: show the new preview instead of guessing
                 return redirect(back + "&changed=1")
-            lines = invoicing.build_lines(client["id"], entries, period_from, period_to)
             total = sum(l["amount_cents"] for l in lines)
             number = invoicing.next_number()
             cur = db.execute(
@@ -149,7 +156,12 @@ def create():
     except invoicing.InvoiceProblem as e:
         return render_template("invoices/new.html", clients=_active_clients(), f=request.form.to_dict(),
                                preview=None, error=str(e)), 400
-    _write_pdf(invoice_id, "invoice_pdf_generated")
+    try:
+        _write_pdf(invoice_id, "invoice_pdf_generated")
+    except Exception as exc:   # the invoice is saved; the PDF can be generated from its page
+        current_app.logger.error("PDF generation failed: %s", type(exc).__name__)
+        audit.log("invoice_pdf_failed", "error", outcome="failure", target=f"invoice:{invoice_id}",
+                  client_id=client["id"], details={"exception": type(exc).__name__})
     return redirect(url_for("invoices.detail", invoice_id=invoice_id))
 
 
