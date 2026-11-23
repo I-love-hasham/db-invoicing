@@ -76,25 +76,27 @@ def edit(product_id: int):
     except forms.FormError as e:
         return render_template("products/form.html", product={**form_values, **request.form.to_dict()},
                                is_new=False, error=e.message), 400
-    before = _for_log({f: product[f] for f in FIELDS})
-    diff = changes(before, _for_log(data))
-    if diff["after"]:
-        try:
-            with atomic() as db:
+    try:
+        with atomic() as db:
+            product = get_product(product_id)            # re-read under the lock
+            if product["archived_at"]:
+                abort(400)
+            diff = changes(_for_log({f: product[f] for f in FIELDS}), _for_log(data))
+            if diff["after"]:
                 db.execute("UPDATE products SET name = ?, description = ?, unit = ?, default_rate_cents = ?,"
                            " updated_at = ? WHERE id = ?", (*[data[f] for f in FIELDS], audit.utcnow_iso(), product_id))
                 audit.log("product_edited", "products", target=f"product:{product_id}", details=diff)
-        except sqlite3.IntegrityError:
-            return render_template("products/form.html", product={**form_values, **request.form.to_dict()},
+    except sqlite3.IntegrityError:
+        return render_template("products/form.html", product={**form_values, **request.form.to_dict()},
                                    is_new=False, error="A product with that name already exists."), 400
     return redirect(url_for("products.index"))
 
 
 @bp.route("/<int:product_id>/archive", methods=["POST"])
 def archive(product_id: int):
-    product = get_product(product_id)
-    if not product["archived_at"]:
-        with atomic() as db:
+    with atomic() as db:
+        product = get_product(product_id)
+        if not product["archived_at"]:
             db.execute("UPDATE products SET archived_at = ?, updated_at = ? WHERE id = ?",
                        (audit.utcnow_iso(), audit.utcnow_iso(), product_id))
             audit.log("product_archived", "products", target=f"product:{product_id}",
@@ -104,9 +106,9 @@ def archive(product_id: int):
 
 @bp.route("/<int:product_id>/restore", methods=["POST"])
 def restore(product_id: int):
-    product = get_product(product_id)
-    if product["archived_at"]:
-        with atomic() as db:
+    with atomic() as db:
+        product = get_product(product_id)
+        if product["archived_at"]:
             db.execute("UPDATE products SET archived_at = NULL, updated_at = ? WHERE id = ?",
                        (audit.utcnow_iso(), product_id))
             audit.log("product_restored", "products", target=f"product:{product_id}",

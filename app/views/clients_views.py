@@ -21,6 +21,14 @@ def _read_form(form) -> dict:
     }
 
 
+def _safe(d: dict) -> dict:
+    """Notes are free text (someone might paste a password): log only that they changed."""
+    out = dict(d)
+    if "notes" in out:
+        out["notes"] = f"[{len(out['notes'])} characters]" if out["notes"] else "[empty]"
+    return out
+
+
 def changes(before: dict, after: dict) -> dict:
     """Only the fields that changed, as {'before': {...}, 'after': {...}}."""
     keys = [k for k in after if before.get(k) != after[k]]
@@ -72,7 +80,7 @@ def new():
                 (*[data[f] for f in FIELDS], now, now),
             )
             audit.log("client_created", "clients", target=f"client:{cur.lastrowid}", client_id=cur.lastrowid,
-                      details={"after": data})
+                      details={"after": _safe(data)})
     except sqlite3.IntegrityError:
         return render_template("clients/form.html", client=request.form, is_new=True,
                                error="A client with that name already exists."), 400
@@ -91,21 +99,30 @@ def detail(client_id: int):
     except forms.FormError as e:
         return render_template("clients/detail.html", client={**dict(client), **request.form.to_dict()},
                                rates=rate_rows(client_id), error=e.message), 400
-    diff = changes({f: client[f] for f in FIELDS}, data)
-    if diff["after"]:
-        try:
-            with atomic() as db:
+    try:
+        with atomic() as db:
+            current = get_client(client_id)          # re-read under the lock
+            if current["archived_at"]:
+                abort(400)
+            diff = changes({f: current[f] for f in FIELDS}, data)
+            if diff["after"]:
                 db.execute(
                     "UPDATE clients SET name = ?, address = ?, email = ?, payment_terms_days = ?, notes = ?,"
                     " updated_at = ? WHERE id = ?",
                     (*[data[f] for f in FIELDS], audit.utcnow_iso(), client_id),
                 )
                 audit.log("client_edited", "clients", target=f"client:{client_id}", client_id=client_id,
-                          details=diff)
-        except sqlite3.IntegrityError:
-            return render_template("clients/detail.html", client={**dict(client), **request.form.to_dict()},
-                                   rates=rate_rows(client_id),
-                                   error="A client with that name already exists."), 400
+                          details={"before": _safe(diff["before"]), "after": _safe(diff["after"])})
+                if "email" in diff["after"]:
+                    # invoices go to this address: redirecting it is worth knowing about
+                    audit.raise_alert("client_email_changed",
+                                      f"Billing email for '{current['name']}' changed from "
+                                      f"'{current['email'] or '(none)'}' to '{data['email'] or '(none)'}' "
+                                      f"by {g.user['username']} from {g.ip}.")
+    except sqlite3.IntegrityError:
+        return render_template("clients/detail.html", client={**dict(client), **request.form.to_dict()},
+                               rates=rate_rows(client_id),
+                               error="A client with that name already exists."), 400
     return redirect(url_for("clients.detail", client_id=client_id, saved=1))
 
 
@@ -114,22 +131,24 @@ def rates(client_id: int):
     client = get_client(client_id)
     if client["archived_at"]:
         abort(400)
-    current = {r["id"]: r for r in rate_rows(client_id)}
-    updates = {}
+    submitted = {}
     try:
-        for product_id, row in current.items():
-            field = f"rate_{product_id}"
-            if field not in request.form:
-                continue
-            new = forms.money(request.form, field, f"Rate for {row['name']}", required=False)
-            if new != row["client_rate_cents"]:
-                updates[product_id] = (row, new)
+        for row in rate_rows(client_id):
+            field = f"rate_{row['id']}"
+            if field in request.form and not row["archived_at"]:   # archived products: read-only
+                submitted[row["id"]] = forms.money(request.form, field, f"Rate for {row['name']}", required=False)
     except forms.FormError as e:
         return render_template("clients/detail.html", client=client, rates=rate_rows(client_id),
                                error=e.message), 400
     now = audit.utcnow_iso()
     with atomic() as db:
-        for product_id, (row, new) in updates.items():
+        if get_client(client_id)["archived_at"]:      # re-check under the lock
+            abort(400)
+        current = {r["id"]: r for r in rate_rows(client_id)}
+        for product_id, new in submitted.items():
+            row = current.get(product_id)
+            if row is None or row["archived_at"] or new == row["client_rate_cents"]:
+                continue
             if new is None:
                 db.execute("DELETE FROM client_rates WHERE client_id = ? AND product_id = ?", (client_id, product_id))
             else:
@@ -148,10 +167,10 @@ def rates(client_id: int):
 
 @bp.route("/<int:client_id>/archive", methods=["POST"])
 def archive(client_id: int):
-    client = get_client(client_id)
-    if client["archived_at"]:
-        return redirect(url_for("clients.detail", client_id=client_id))
     with atomic() as db:
+        client = get_client(client_id)
+        if client["archived_at"]:
+            return redirect(url_for("clients.detail", client_id=client_id))
         db.execute("UPDATE clients SET archived_at = ?, updated_at = ? WHERE id = ?",
                    (audit.utcnow_iso(), audit.utcnow_iso(), client_id))
         audit.log("client_archived", "clients", target=f"client:{client_id}", client_id=client_id,
@@ -163,10 +182,10 @@ def archive(client_id: int):
 
 @bp.route("/<int:client_id>/restore", methods=["POST"])
 def restore(client_id: int):
-    client = get_client(client_id)
-    if not client["archived_at"]:
-        return redirect(url_for("clients.detail", client_id=client_id))
     with atomic() as db:
+        client = get_client(client_id)
+        if not client["archived_at"]:
+            return redirect(url_for("clients.detail", client_id=client_id))
         db.execute("UPDATE clients SET archived_at = NULL, updated_at = ? WHERE id = ?",
                    (audit.utcnow_iso(), client_id))
         audit.log("client_restored", "clients", target=f"client:{client_id}", client_id=client_id,

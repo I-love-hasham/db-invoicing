@@ -20,7 +20,7 @@
     <input type="text" id="email" name="email" value="{{ client.email or '' }}" maxlength="254" inputmode="email">
     <label for="payment_terms_days">Payment terms (days) — 15 = Net 15</label>
     <input type="text" id="payment_terms_days" name="payment_terms_days" value="{{ client.payment_terms_days if client.payment_terms_days is not none else 15 }}" inputmode="numeric" maxlength="3" required>
-    <label for="notes">Notes (private, not on invoices)</label>
+    <label for="notes">Notes (not on invoices — never put passwords or credentials here; those belong in IT Glue)</label>
     <textarea id="notes" name="notes" rows="2" maxlength="2000">{{ client.notes or '' }}</textarea>
     <button type="submit">Save changes</button>
   </form>
@@ -38,7 +38,7 @@
       {% for r in rates %}
       <tr><td>{{ r.name }}{% if r.archived_at %} <span class="muted">(archived)</span>{% endif %}</td>
           <td>{{ r.default_rate_cents | money }} / {{ r.unit }}</td>
-          <td>{% if client.archived_at %}{{ r.client_rate_cents | money }}{% else %}
+          <td>{% if client.archived_at or r.archived_at %}{{ r.client_rate_cents | money }}{% else %}
               <input type="text" name="rate_{{ r.id }}" value="{{ r.client_rate_cents | money_input }}" inputmode="decimal" maxlength="12" placeholder="default">{% endif %}</td>
           <td>{% if r.effective_cents is none %}<span class="bad">no rate set</span>{% else %}{{ r.effective_cents | money }}{% endif %}</td></tr>
       {% endfor %}

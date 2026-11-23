@@ -146,3 +146,86 @@ def test_audit_chain_still_verifies(client, app, clock):
     _add_product(client)
     _add_client(client)
     assert "entries verified" in client.get("/security-status").get_data(as_text=True)
+
+
+# ---------------------------------------------------------------- review findings
+
+def test_upgrade_from_previous_version_keeps_audit_chain_valid(tmp_path):
+    """An audit.db created before client_id existed must upgrade and still verify."""
+    import sqlite3
+    from cryptography.fernet import Fernet
+    from app import audit, create_app
+    cfg = {"SECRET_KEY": "s" * 48, "AUDIT_HMAC_KEY": "a" * 48, "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+           "SETUP_TOKEN": "t" * 30, "DATA_DIR": str(tmp_path / "data"), "COOKIE_SECURE": False,
+           "TRUST_PROXY_HEADERS": False, "APP_TIMEZONE": "UTC", "BUILD_DATE": "t",
+           "SECURITY_DIR": str(tmp_path), "TESTING": True}
+    old = create_app(cfg)
+    with old.test_request_context("/"):
+        from flask import g
+        g.ip, g.ua, g.user = "1.1.1.1", "t", None
+        audit.log("old_entry_1", "system")
+        audit.log("old_entry_2", "system")
+    # turn it into the previous version's file: no client_id column
+    conn = sqlite3.connect(tmp_path / "data" / "audit.db")
+    conn.execute("DROP INDEX idx_audit_client")
+    conn.execute("ALTER TABLE audit_log DROP COLUMN client_id")
+    conn.commit()
+    conn.close()
+
+    new = create_app(cfg)          # must start, and migrate
+    with new.test_request_context("/"):
+        from flask import g
+        g.ip, g.ua, g.user = "1.1.1.1", "t", None
+        audit.log("new_entry", "clients", client_id=7)
+        ok, n, msg = audit.verify_chain()
+    assert ok and n == 3, msg
+
+
+def test_comma_as_decimal_is_rejected_not_multiplied(client, app, clock):
+    do_setup(client, app, clock)
+    assert _add_product(client, rate="77,18").status_code == 400
+    assert _add_product(client, rate="1,250.00").status_code == 302
+
+
+def test_client_notes_text_never_logged(client, app, clock):
+    do_setup(client, app, clock)
+    _add_client(client, notes="Server admin password: Hunter2-Example")
+    token = csrf(client, "/clients/1")
+    client.post("/clients/1", data={"csrf_token": token, "name": "OKG Tech", "address": "", "email": "",
+                                    "payment_terms_days": "15", "notes": "new secret Hunter3"})
+    with app.app_context():
+        dump = " ".join(str(tuple(r)) for r in get_audit_db().execute("SELECT * FROM audit_log"))
+    assert "Hunter2" not in dump and "Hunter3" not in dump and "characters]" in dump
+    assert "Hunter2" not in client.get("/audit/export.csv").get_data(as_text=True)
+
+
+def test_archived_product_rate_is_read_only(client, app, clock):
+    do_setup(client, app, clock)
+    _add_product(client)
+    _add_client(client)
+    token = csrf(client, "/clients/1")
+    client.post("/clients/1/rates", data={"csrf_token": token, "rate_1": "80"})
+    token = csrf(client, "/products/")
+    client.post("/products/1/archive", data={"csrf_token": token})
+    token = csrf(client, "/clients/1")
+    client.post("/clients/1/rates", data={"csrf_token": token, "rate_1": "5"})
+    with app.app_context():
+        assert get_db().execute("SELECT rate_cents FROM client_rates").fetchone()[0] == 8000
+
+
+def test_invisible_and_reversing_characters_rejected(client, app, clock):
+    do_setup(client, app, clock)
+    assert _add_client(client, name="OKG​ Tech").status_code == 400
+    assert _add_client(client, name="‮heT GKO").status_code == 400
+    assert _add_client(client, name="Café Services").status_code == 302
+
+
+def test_billing_email_change_raises_alert(client, app, clock):
+    do_setup(client, app, clock)
+    _add_client(client)
+    token = csrf(client, "/clients/1")
+    client.post("/clients/1", data={"csrf_token": token, "name": "OKG Tech", "address": "",
+                                    "email": "attacker@evil.example", "payment_terms_days": "15", "notes": ""})
+    with app.app_context():
+        msgs = [r[0] for r in get_db().execute("SELECT message FROM security_alerts WHERE kind = 'client_email_changed'")]
+    assert msgs and "attacker@evil.example" in msgs[0] and "hr@okgtech.com" in msgs[0]

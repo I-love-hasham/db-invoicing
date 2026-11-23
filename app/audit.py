@@ -53,8 +53,16 @@ def _mac(message: str) -> str:
     return hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
 
 
+_BASE_FIELDS = tuple(f for f in FIELDS if f != "client_id")
+
+
 def _payload(entry: dict) -> str:
-    return json.dumps([entry[f] for f in FIELDS], ensure_ascii=False, separators=(",", ":"))
+    # client_id was added later: it's appended only when set, so entries written
+    # before it existed still verify, and adding/removing it still breaks the hash.
+    values = [entry[f] for f in _BASE_FIELDS]
+    if entry.get("client_id") is not None:
+        values.append({"client_id": entry["client_id"]})
+    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
 
 
 def _head_mac(count: int, last_hash: str) -> str:

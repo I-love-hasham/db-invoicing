@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
     category    TEXT NOT NULL,
     action      TEXT NOT NULL,
     target      TEXT,
-    client_id   INTEGER,
     outcome     TEXT NOT NULL,
     details     TEXT NOT NULL DEFAULT '{}',
     prev_hash   TEXT NOT NULL,
@@ -17,7 +16,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log (ts);
 CREATE INDEX IF NOT EXISTS idx_audit_cat_action ON audit_log (category, action);
-CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log (client_id);
 
 -- The database itself refuses edits and deletes.
 CREATE TRIGGER IF NOT EXISTS audit_log_no_update

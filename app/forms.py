@@ -6,7 +6,9 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,63}$")
-_MONEY = re.compile(r"^\$?\s*(\d{1,6})(\.\d{1,2})?$")
+# Commas only as thousands separators (1,250.00). "77,18" is rejected, not read as 7718.
+_MONEY = re.compile(r"^\$?\s*(\d{1,3}(?:,\d{3})+|\d{1,7})(\.\d{1,2})?$")
+_BLOCKED_CATEGORIES = {"Cc", "Cf", "Co", "Cs", "Zl", "Zp"}   # control, invisible, direction-override
 MAX_RATE_CENTS = 10_000_000   # $100,000.00 — anything above is a typo
 
 
@@ -18,9 +20,9 @@ class FormError(ValueError):
 
 
 def text(form, field: str, label: str, max_len: int, required: bool = False, multiline: bool = False) -> str:
-    value = (form.get(field) or "").replace("\r\n", "\n").strip()
+    value = unicodedata.normalize("NFC", (form.get(field) or "").replace("\r\n", "\n")).strip()
     allowed = "\n\t" if multiline else ""
-    if any(unicodedata.category(ch) == "Cc" and ch not in allowed for ch in value):
+    if any(unicodedata.category(ch) in _BLOCKED_CATEGORIES and ch not in allowed for ch in value):
         raise FormError(field, f"{label} contains characters that aren't allowed.")
     if required and not value:
         raise FormError(field, f"{label} is required.")
@@ -48,7 +50,7 @@ def integer(form, field: str, label: str, lo: int, hi: int) -> int:
 
 def money(form, field: str, label: str, required: bool = True) -> int | None:
     """'77.18', '$77.18', '1,250' -> cents. Returns None if empty and not required."""
-    raw = (form.get(field) or "").strip().replace(",", "")
+    raw = (form.get(field) or "").strip()
     if not raw:
         if required:
             raise FormError(field, f"{label} is required.")
@@ -57,7 +59,7 @@ def money(form, field: str, label: str, required: bool = True) -> int | None:
     if not m or not raw.isascii():
         raise FormError(field, f"{label} must be an amount like 77.18.")
     try:
-        cents = int(Decimal(m.group(1) + (m.group(2) or "")) * 100)
+        cents = int(Decimal(m.group(1).replace(",", "") + (m.group(2) or "")) * 100)
     except InvalidOperation:
         raise FormError(field, f"{label} must be an amount like 77.18.")
     if cents > MAX_RATE_CENTS:
