@@ -53,8 +53,12 @@ def dashboard():
     auth.sweep_rate_limits()
     vulns = vulnerability_report()
     chain_ok, _, _ = audit.verify_chain()
+    from .time_views import elapsed, running_timer
+    timer = running_timer()
     return render_template(
         "dashboard.html",
+        timer=timer,
+        timer_elapsed=elapsed(timer) if timer else None,
         vulns=vulns,
         chain_ok=chain_ok,
         backups_left=auth.backup_codes_left(g.user["id"]),

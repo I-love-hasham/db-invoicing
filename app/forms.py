@@ -3,7 +3,7 @@ before it touches the database. Bad input raises FormError with a message
 that is safe to show on the page."""
 import re
 import unicodedata
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,63}$")
 # Commas only as thousands separators (1,250.00). "77,18" is rejected, not read as 7718.
@@ -72,6 +72,54 @@ def choice(form, field: str, label: str, options: tuple) -> str:
     if value not in options:
         raise FormError(field, f"Choose a valid {label.lower()}.")
     return value
+
+
+_HOURS_DECIMAL = re.compile(r"^(\d{1,2})(?:\.(\d{1,2}))?$")
+_HOURS_CLOCK = re.compile(r"^(\d{1,2}):([0-5]\d)$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def hours(form, field: str, label: str) -> int:
+    """'7.5', '7.50' or '7:30' -> seconds. Between 1 minute and 24 hours."""
+    raw = (form.get(field) or "").strip()
+    if not raw.isascii():
+        raise FormError(field, f"{label} must be like 7.5 or 7:30.")
+    m = _HOURS_DECIMAL.match(raw)
+    if m:
+        seconds = int(Decimal(raw) * 3600)
+    else:
+        m = _HOURS_CLOCK.match(raw)
+        if not m:
+            raise FormError(field, f"{label} must be like 7.5 or 7:30.")
+        seconds = int(m.group(1)) * 3600 + int(m.group(2)) * 60
+    if not 60 <= seconds <= 86400:
+        raise FormError(field, f"{label} must be between 1 minute and 24 hours.")
+    return seconds
+
+
+def date_value(form, field: str, label: str, latest: str | None = None) -> str:
+    """YYYY-MM-DD. `latest` (ISO date) rejects dates after it, e.g. future work dates."""
+    from datetime import date
+    raw = (form.get(field) or "").strip()
+    if not (raw.isascii() and _DATE.match(raw)):
+        raise FormError(field, f"{label} must be a date.")
+    try:
+        d = date.fromisoformat(raw)
+    except ValueError:
+        raise FormError(field, f"{label} must be a valid date.")
+    if not 2020 <= d.year <= 2100:
+        raise FormError(field, f"{label} is out of range.")
+    if latest is not None and d.isoformat() > latest:
+        raise FormError(field, f"{label} can't be in the future.")
+    return d.isoformat()
+
+
+def format_hours(seconds: int | None) -> str:
+    """Seconds -> decimal hours with 2 places, the way invoices show them (43.32)."""
+    if seconds is None:
+        return "—"
+    from .billing import billable_hours
+    return str(billable_hours(seconds))
 
 
 def format_money(cents: int | None) -> str:

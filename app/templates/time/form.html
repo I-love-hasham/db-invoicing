@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{% if is_new %}Add time{% else %}Edit time{% endif %}{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>{% if is_new %}Add time{% else %}Edit time{% endif %}</h1>
+  {% if capped %}<div class="notice">That timer ran more than 24 hours, so it was stopped at 24. Correct the hours below.</div>{% endif %}
+  {% if locked %}<div class="notice">This entry is on an invoice, so it can't be changed.</div>
+  {% elif running %}<div class="notice">This timer is still running. Stop it on the Time page first.</div>
+  {% else %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="client_id">Client</label>
+    <select id="client_id" name="client_id" required>
+      {% for c in clients %}<option value="{{ c.id }}" {% if entry.client_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <label for="product_id">Product</label>
+    <select id="product_id" name="product_id" required>
+      {% for p in products %}<option value="{{ p.id }}" {% if entry.product_id|string == p.id|string %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+    </select>
+    <label for="work_date">Date</label>
+    <input type="date" id="work_date" name="work_date" value="{{ entry.work_date or '' }}" required>
+    <label for="hours">Hours (7.5 or 7:30)</label>
+    <input type="text" id="hours" name="hours" value="{{ entry.hours or '' }}" required maxlength="5" inputmode="decimal">
+    <label for="notes">Notes (these become invoice lines — no passwords)</label>
+    <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ entry.notes or '' }}</textarea>
+    <button type="submit">Save</button>
+  </form>
+  {% if not is_new %}
+  <form method="post" action="{{ url_for('time.delete', entry_id=entry.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Delete entry</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  <p><a href="{{ url_for('time.index') }}">Back to time</a></p>
+</div>
+{% endblock %}
