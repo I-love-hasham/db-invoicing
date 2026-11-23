@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 
 _EMAIL = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,63}$")
 # Commas only as thousands separators (1,250.00). "77,18" is rejected, not read as 7718.
-_MONEY = re.compile(r"^\$?\s*(\d{1,3}(?:,\d{3})+|\d{1,7})(\.\d{1,2})?$")
+_MONEY = re.compile(r"^\$?\s*([1-9]\d{0,2}(?:,\d{3})+|\d{1,7})(\.\d{1,2})?$")
 _BLOCKED_CATEGORIES = {"Cc", "Cf", "Co", "Cs", "Zl", "Zp"}   # control, invisible, direction-override
 MAX_RATE_CENTS = 10_000_000   # $100,000.00 — anything above is a typo
 

@@ -28,7 +28,7 @@ def test_money_parsing():
     f = lambda v, req=True: forms.money({"x": v}, "x", "Rate", required=req)
     assert f("77.18") == 7718 and f("$77.18") == 7718 and f("1,250") == 125000 and f("0.5") == 50
     assert f("", req=False) is None
-    for bad in ("77.181", "-5", "abc", "1e3", "٧٧", "99999999"):
+    for bad in ("77.181", "-5", "abc", "1e3", "٧٧", "99999999", "77,18", "0,500", "1,2,3"):
         try:
             f(bad)
             assert False, bad
