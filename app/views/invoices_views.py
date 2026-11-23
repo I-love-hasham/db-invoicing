@@ -6,7 +6,7 @@ from datetime import date
 
 from flask import Blueprint, abort, current_app, g, redirect, render_template, request, send_file, url_for
 
-from .. import audit, business, forms, invoicing, pdf
+from .. import audit, business, forms, invoicing, mailer, pdf
 from ..db import atomic, get_db
 from .time_views import _today
 
@@ -182,7 +182,8 @@ def detail(invoice_id: int):
     entries = get_db().execute(
         "SELECT t.*, p.name AS product_name FROM time_entries t JOIN products p ON p.id = t.product_id"
         " WHERE t.invoice_id = ? ORDER BY t.work_date, t.id", (invoice_id,)).fetchall()
-    return render_template("invoices/detail.html", inv=inv, vm=vm, entries=entries, today=_today())
+    return render_template("invoices/detail.html", inv=inv, vm=vm, entries=entries, today=_today(),
+                           emails=mailer.history(invoice_id))
 
 
 @bp.route("/<int:invoice_id>/pdf")
@@ -348,5 +349,115 @@ def follow_up(invoice_id: int, stage: int):
                            (invoice_id, stage)).fetchone()
     if row is None:
         abort(404)
+    from .. import graph
     msg = payments.follow_up_text(inv, stage, business.get_details()["signature"])
-    return render_template("invoices/follow_up.html", inv=inv, stage=stage, msg=msg, follow_up=row)
+    msg["to"] = _current_client_email(inv)
+    return render_template("invoices/follow_up.html", inv=inv, stage=stage, msg=msg, follow_up=row,
+                           email_ready=graph.configured(), send_token=mailer.new_send_token())
+
+
+# ---------------------------------------------------------------- email (preview -> Send)
+
+def _invoice_email_defaults(inv) -> dict:
+    vm = invoicing.view_model(inv, [], _today())
+    biz = vm["business"]
+    sig = business.get_details()["signature"]
+    subject = (f"Invoice #{inv['number']} – {biz['name']} – {invoicing.us_date(inv['period_from'])} to "
+               f"{invoicing.us_date(inv['period_to'])}")
+    body = (f"Hi {vm['client']['name']},\n\n"
+            f"Please find attached invoice #{inv['number']} for {forms.format_money(inv['total_cents'])} for IT "
+            f"services from {vm['period'].replace(' – ', ' to ')}. Payment is due by {vm['due_date']} ({vm['terms']}).\n\n"
+            f"Thank you,\n{sig}\n{biz['name']}")
+    return {"subject": subject, "body": body}
+
+
+def _current_client_email(inv) -> str:
+    row = get_db().execute("SELECT email FROM clients WHERE id = ?", (inv["client_id"],)).fetchone()
+    return row["email"] if row else ""
+
+
+def _verified_pdf(inv) -> bytes:
+    """The invoice PDF, but only if it's exactly the file the app wrote."""
+    if not inv["pdf_path"]:
+        raise mailer.SendRefused("Generate the PDF first.")
+    base = os.path.realpath(current_app.config["DATA_DIR"])
+    full = os.path.realpath(os.path.join(base, inv["pdf_path"]))
+    if not full.startswith(base + os.sep) or not os.path.isfile(full):
+        raise mailer.SendRefused("The PDF file is missing. Regenerate it first.")
+    with open(full, "rb") as fh:
+        data = fh.read()
+    if hashlib.sha256(data).hexdigest() != inv["pdf_sha256"]:
+        raise mailer.SendRefused("The PDF was changed outside the app. Regenerate it before sending.")
+    return data
+
+
+@bp.route("/<int:invoice_id>/send", methods=["GET", "POST"])
+def send_invoice(invoice_id: int):
+    from .. import graph
+    inv, _ = _get(invoice_id)
+    to = _current_client_email(inv)
+    cc, bcc = mailer.copy_recipients()
+    defaults = _invoice_email_defaults(inv)
+    ctx = {"inv": inv, "to": to, "cc": cc, "bcc": bcc, "subject": defaults["subject"],
+           "email_ready": graph.configured(), "history": mailer.history(invoice_id)}
+    if request.method == "GET":
+        if inv["status"] == "void":
+            abort(400)
+        return render_template("invoices/send.html", body=defaults["body"], send_token=mailer.new_send_token(), **ctx)
+    try:
+        body = forms.text(request.form, "body", "Message", 5000, required=True, multiline=True)
+        if not to:
+            raise forms.FormError("to", "This client has no billing email. Add one on the client's page.")
+    except forms.FormError as e:
+        return render_template("invoices/send.html", body=request.form.get("body", ""),
+                               send_token=request.form.get("send_token", ""), error=e.message, **ctx), 400
+
+    def recheck(db):
+        current = db.execute("SELECT status FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+        if current["status"] == "void":
+            raise mailer.SendRefused("This invoice was voided.")
+    try:
+        pdf_bytes = _verified_pdf(inv)
+        mailer.send("invoice", request.form.get("send_token", ""), [to], defaults["subject"], body, invoice=inv,
+                    attachments=[(f"Invoice-{inv['number']}.pdf", pdf_bytes)], recheck=recheck)
+    except (mailer.SendRefused, graph.GraphError) as e:
+        return render_template("invoices/send.html", body=body, send_token=mailer.new_send_token(),
+                               error=str(e), **ctx), 400
+    return redirect(url_for("invoices.detail", invoice_id=invoice_id, sent=1))
+
+
+@bp.route("/<int:invoice_id>/follow-up/<int:stage>/send", methods=["POST"])
+def send_follow_up(invoice_id: int, stage: int):
+    from .. import graph, payments
+    inv, _ = _get(invoice_id)
+    fu = get_db().execute("SELECT * FROM follow_ups WHERE invoice_id = ? AND stage = ?", (invoice_id, stage)).fetchone()
+    if fu is None or stage not in payments.FOLLOW_UP_STAGES:
+        abort(404)
+    to = _current_client_email(inv)
+    msg = payments.follow_up_text(inv, stage, business.get_details()["signature"])
+    try:
+        body = forms.text(request.form, "body", "Message", 5000, required=True, multiline=True)
+        if not to:
+            raise forms.FormError("to", "This client has no billing email. Add one on the client's page.")
+    except forms.FormError as e:
+        return render_template("invoices/follow_up.html", inv=inv, stage=stage,
+                               msg={**msg, "to": to, "body": request.form.get("body", msg["body"])}, follow_up=fu,
+                               email_ready=graph.configured(), send_token=mailer.new_send_token(),
+                               error=e.message), 400
+
+    def recheck(db):
+        cur = db.execute("SELECT i.status, f.sent_at FROM invoices i JOIN follow_ups f ON f.invoice_id = i.id"
+                         " WHERE f.id = ?", (fu["id"],)).fetchone()
+        if cur["status"] != "unpaid":
+            raise mailer.SendRefused("This invoice isn't unpaid any more — no reminder needed.")
+        if cur["sent_at"]:
+            raise mailer.SendRefused("This reminder was already sent.")
+    try:
+        mailer.send("follow_up", request.form.get("send_token", ""), [to], msg["subject"], body, invoice=inv,
+                    follow_up_id=fu["id"], attachments=[(f"Invoice-{inv['number']}.pdf", _verified_pdf(inv))],
+                    recheck=recheck)
+    except (mailer.SendRefused, graph.GraphError) as e:
+        return render_template("invoices/follow_up.html", inv=inv, stage=stage, msg={**msg, "to": to, "body": body},
+                               follow_up=fu, email_ready=graph.configured(), send_token=mailer.new_send_token(),
+                               error=str(e)), 400
+    return redirect(url_for("main.dashboard", reminder_sent=1))

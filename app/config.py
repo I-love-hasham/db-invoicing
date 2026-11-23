@@ -43,4 +43,9 @@ def load_config() -> dict:
         "APP_TIMEZONE": os.environ.get("APP_TIMEZONE", "America/New_York"),
         "BUILD_DATE": os.environ.get("BUILD_DATE", "unknown"),
         "SECURITY_DIR": os.environ.get("SECURITY_DIR", "/app/security"),
+        # Microsoft 365 / Graph (send-only, one mailbox). Email stays off until all are set.
+        "M365_TENANT_ID": os.environ.get("M365_TENANT_ID", "").strip(),
+        "M365_CLIENT_ID": os.environ.get("M365_CLIENT_ID", "").strip(),
+        "M365_SENDER": os.environ.get("M365_SENDER", "").strip(),
+        "M365_CERT_PATH": os.environ.get("M365_CERT_PATH", "/run/secrets/m365.pem").strip(),
     }

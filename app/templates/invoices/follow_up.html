@@ -4,9 +4,17 @@
 <p><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}">← Invoice #{{ inv.number }}</a></p>
 <div class="card">
   <h1>{{ stage }}-day reminder — invoice #{{ inv.number }}</h1>
+  {% if follow_up.sent_at %}<div class="notice">Sent {{ follow_up.sent_at | localtime }}.</div>{% endif %}
+  {% if not email_ready %}<div class="notice">Email isn't set up yet — see <a href="{{ url_for('settings.email') }}">Settings → Email</a>. You can copy this text into your own email meanwhile.</div>{% endif %}
   <p><strong>To:</strong> {{ msg.to or '(no billing email on file for this client)' }}</p>
   <p><strong>Subject:</strong> {{ msg.subject }}</p>
-  <pre class="email">{{ msg.body }}</pre>
-  <p class="notice">Sending from billing@ is added in the email step. Until then you can copy this text into your own email.</p>
+  <p><strong>Attachment:</strong> Invoice-{{ inv.number }}.pdf</p>
+  <form method="post" action="{{ url_for('invoices.send_follow_up', invoice_id=inv.id, stage=stage) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="send_token" value="{{ send_token }}">
+    <label for="body">Message</label>
+    <textarea id="body" name="body" rows="11" maxlength="5000" required>{{ msg.body }}</textarea>
+    <button type="submit" {% if not email_ready or not msg.to or follow_up.sent_at %}disabled{% endif %}>Send reminder</button>
+  </form>
 </div>
 {% endblock %}

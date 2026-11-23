@@ -36,6 +36,43 @@ Cloudflare Access policy (your email + MFA) in front of it, open the site and go
 **Back up `.env` offline.** Without `ENCRYPTION_KEY` the 2FA secret can't be read, and
 without `AUDIT_HMAC_KEY` the audit log can't be verified.
 
+## Setting up email from billing@ (Microsoft 365)
+
+The app can **only send**, **only from billing@**. It never reads any mailbox.
+
+1. **Shared mailbox:** admin.microsoft.com → Teams & groups → Shared mailboxes → add `billing@yourdomain`.
+   Keep sign-in blocked; no license.
+2. **App registration:** entra.microsoft.com → App registrations → New registration →
+   name `DB Invoicing (send-only)`, single tenant, no redirect URI.
+   **Do not add any API permissions** (not even Mail.Send) — the permission is given in Exchange
+   in step 5, scoped to one mailbox. An Entra Mail.Send grant would apply to *every* mailbox.
+3. **Certificate** (on the server, in the project folder):
+   ```bash
+   install -d -o 10001 -g 10001 -m 700 secrets
+   openssl req -x509 -newkey rsa:3072 -sha256 -days 730 -nodes -subj "/CN=db-invoicing" \
+     -keyout /tmp/k.pem -out /tmp/c.pem
+   cat /tmp/k.pem /tmp/c.pem | sudo tee secrets/m365.pem >/dev/null && shred -u /tmp/k.pem
+   sudo chown 10001:10001 secrets/m365.pem && sudo chmod 600 secrets/m365.pem
+   ```
+   Upload **only `/tmp/c.pem`** (the public certificate) to the app registration →
+   Certificates & secrets → Certificates. The private key never leaves the server.
+4. **.env:** set `M365_TENANT_ID`, `M365_CLIENT_ID` (Application ID) and `M365_SENDER=billing@yourdomain`.
+5. **Exchange RBAC for Applications** (Exchange Online PowerShell):
+   ```powershell
+   Connect-ExchangeOnline
+   # IDs from Entra → Enterprise applications (NOT App registrations)
+   New-ServicePrincipal -AppId <Application ID> -ObjectId <Object ID> -DisplayName "DB Invoicing (send-only)"
+   New-ManagementScope -Name "DB Invoicing - billing only" -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'billing@yourdomain'"
+   New-ManagementRoleAssignment -Name "DB Invoicing send" -Role "Application Mail.Send" -App <Application ID> -CustomResourceScope "DB Invoicing - billing only"
+   # check: InScope must be True for billing@ and False for any other mailbox
+   Test-ServicePrincipalAuthorization -Identity <Application ID> -Resource billing@yourdomain
+   Test-ServicePrincipalAuthorization -Identity <Application ID> -Resource you@yourdomain
+   ```
+6. **SPF, DKIM, DMARC** on the domain, so invoices don't land in spam.
+7. Restart the app (`docker compose up -d`), then Settings → Email → set the copy address → **Send a test email**.
+
+**Kill switch:** disable the app registration (or remove the role assignment) — sending stops immediately.
+
 ## Updating (monthly patch day)
 
 1. Merge the Dependabot PRs on GitHub (CI must be green).

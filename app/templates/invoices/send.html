@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Send invoice #{{ inv.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('invoices.detail', invoice_id=inv.id) }}">← Invoice #{{ inv.number }}</a></p>
+<div class="card">
+  <h1>Send invoice #{{ inv.number }}</h1>
+  {% if not email_ready %}<div class="notice">Email isn't set up yet — see <a href="{{ url_for('settings.email') }}">Settings → Email</a>.</div>{% endif %}
+  <p><strong>From:</strong> billing@ (your shared mailbox)</p>
+  <p><strong>To:</strong> {{ to or '(no billing email on this client — add one first)' }}</p>
+  {% if cc %}<p><strong>CC:</strong> {{ cc | join(', ') }}</p>{% endif %}
+  {% if bcc %}<p><strong>BCC:</strong> {{ bcc | join(', ') }}</p>{% endif %}
+  <p><strong>Subject:</strong> {{ subject }}</p>
+  <p><strong>Attachment:</strong> Invoice-{{ inv.number }}.pdf</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="send_token" value="{{ send_token }}">
+    <label for="body">Message</label>
+    <textarea id="body" name="body" rows="9" maxlength="5000" required>{{ body }}</textarea>
+    <button type="submit" {% if not email_ready or not to %}disabled{% endif %}>Send</button>
+  </form>
+</div>
+{% if history %}
+<div class="card"><h2>Already sent</h2>
+  <table><tr><th>When</th><th>To</th><th>Subject</th><th>Result</th></tr>
+  {% for h in history %}<tr><td>{{ h.created_at | localtime }}</td><td>{{ h.to_addr }}</td><td>{{ h.subject }}</td>
+    <td>{% if h.status == 'sent' %}<span class="ok">sent</span>{% else %}<span class="bad">{{ h.status }}</span> {{ h.error or '' }}{% endif %}</td></tr>{% endfor %}
+  </table></div>
+{% endif %}
+{% endblock %}
