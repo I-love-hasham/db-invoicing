@@ -39,6 +39,21 @@ def _today() -> str:
     return _now_utc().astimezone(_tz()).date().isoformat()
 
 
+def _latest_work_date() -> str:
+    return (date.fromisoformat(_today()) + timedelta(days=1)).isoformat()
+
+
+MIN_TIMER_SECONDS = 60
+
+
+def _check_active(db, client_id: int, product_id: int) -> None:
+    """Re-check under the write lock that neither was archived a moment ago."""
+    row = db.execute("SELECT (SELECT archived_at FROM clients WHERE id = ?) AS ca,"
+                     " (SELECT archived_at FROM products WHERE id = ?) AS pa", (client_id, product_id)).fetchone()
+    if row["ca"] is not None or row["pa"] is not None:
+        abort(400, "That client or product was just archived.")
+
+
 def _notes_meta(notes: str) -> str:
     """Notes may contain anything a tech types (even a password): log only their length."""
     return f"[{len(notes)} characters]" if notes else "[empty]"
@@ -148,6 +163,7 @@ def start():
     now = _now_utc()
     try:
         with atomic() as db:
+            _check_active(db, client["id"], product["id"])
             cur = db.execute(
                 "INSERT INTO time_entries (client_id, product_id, work_date, started_at, notes, source,"
                 " created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'timer', ?, ?)",
@@ -181,6 +197,10 @@ def _finish_or_save(stop: bool):
         timer = running_timer()          # read under the lock
         if timer is None:
             return redirect(url_for("time.index"))
+        if request.form.get("version") != timer["updated_at"]:
+            # notes were saved from another tab/device since this page loaded
+            return _index_with_error("These notes were changed somewhere else. Your text wasn't saved — "
+                                     "copy it, reload the page, and try again.")
         if not stop:
             if notes != timer["notes"]:
                 db.execute("UPDATE time_entries SET notes = ?, updated_at = ? WHERE id = ?",
@@ -189,6 +209,12 @@ def _finish_or_save(stop: bool):
                           details={"notes": _notes_meta(notes)})
             return redirect(url_for("time.index"))
         seconds = int((now - _parse(timer["started_at"])).total_seconds())
+        if seconds < MIN_TIMER_SECONDS:
+            db.execute("UPDATE time_entries SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                       (_iso(now), _iso(now), timer["id"]))
+            audit.log("timer_discarded", "time", target=f"time:{timer['id']}", client_id=timer["client_id"],
+                      details={"reason": "under 1 minute", "seconds": seconds})
+            return redirect(url_for("time.index", short=1))
         capped = seconds > MAX_TIMER_SECONDS
         seconds = max(0, min(seconds, MAX_TIMER_SECONDS))
         db.execute("UPDATE time_entries SET ended_at = ?, duration_seconds = ?, notes = ?, updated_at = ?"
@@ -215,7 +241,7 @@ def new():
                                products=products, is_new=True)
     try:
         client, product = _pick(request.form, clients, products)
-        work_date = forms.date_value(request.form, "work_date", "Date")
+        work_date = forms.date_value(request.form, "work_date", "Date", latest=_latest_work_date())
         seconds = forms.hours(request.form, "hours", "Hours")
         notes = forms.text(request.form, "notes", "Notes", NOTES_MAX, multiline=True)
     except forms.FormError as e:
@@ -223,6 +249,7 @@ def new():
                                is_new=True, error=e.message), 400
     now = _iso(_now_utc())
     with atomic() as db:
+        _check_active(db, client["id"], product["id"])
         cur = db.execute(
             "INSERT INTO time_entries (client_id, product_id, work_date, duration_seconds, notes, source,"
             " created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'manual', ?, ?)",
@@ -251,24 +278,26 @@ def edit(entry_id: int):
     _editable_or_400(entry)
     try:
         client, product = _pick(request.form, clients, products)
-        work_date = forms.date_value(request.form, "work_date", "Date")
-        seconds = forms.hours(request.form, "hours", "Hours")
+        work_date = forms.date_value(request.form, "work_date", "Date", latest=_latest_work_date())
+        hours_text = (request.form.get("hours") or "").strip()
         notes = forms.text(request.form, "notes", "Notes", NOTES_MAX, multiline=True)
+        seconds = None if hours_text == values["hours"] else forms.hours(request.form, "hours", "Hours")
     except forms.FormError as e:
         return render_template("time/form.html", entry={**values, **request.form.to_dict()}, clients=clients,
                                products=products, is_new=False, error=e.message), 400
     with atomic() as db:
         current = _get_entry(entry_id)            # re-read under the lock
         _editable_or_400(current)
+        if seconds is None:                       # hours left as shown: keep the exact stored seconds
+            seconds = current["duration_seconds"]
+        if client["id"] != current["client_id"] or product["id"] != current["product_id"]:
+            _check_active(db, client["id"], product["id"])
         before = {"client": current["client_name"], "product": current["product_name"], "date": current["work_date"],
                   "hours": forms.format_hours(current["duration_seconds"]), "notes": current["notes"]}
         after = {"client": client["name"].removesuffix(" (archived)"),
                  "product": product["name"].removesuffix(" (archived)"), "date": work_date,
                  "hours": forms.format_hours(seconds), "notes": notes}
         changed = [k for k in after if before[k] != after[k]]
-        # small differences under the 2-decimal display still count as a change
-        if seconds != current["duration_seconds"] and "hours" not in changed:
-            changed.append("hours")
         if changed:
             db.execute("UPDATE time_entries SET client_id = ?, product_id = ?, work_date = ?, duration_seconds = ?,"
                        " notes = ?, updated_at = ? WHERE id = ?",

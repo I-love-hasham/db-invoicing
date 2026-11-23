@@ -2,6 +2,7 @@
 {% block title %}Time{% endblock %}
 {% block content %}
 <h1>Time</h1>
+{% if request.args.get('short') %}<div class="notice">That timer ran less than a minute, so it was discarded.</div>{% endif %}
 
 <div class="card timer {% if timer %}running{% endif %}">
   {% if timer %}
@@ -9,6 +10,7 @@
   <p><strong>{{ timer.client_name }}</strong> · {{ timer.product_name }} · started {{ timer.started_at | localtime }}</p>
   <form method="post" action="{{ url_for('time.stop') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ timer.updated_at }}">
     <label for="notes">Notes (what you're working on)</label>
     <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ timer.notes }}</textarea>
     <button type="submit" formaction="{{ url_for('time.save_timer_notes') }}" class="secondary">Save notes</button>

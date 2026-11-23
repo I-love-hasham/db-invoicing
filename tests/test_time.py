@@ -30,6 +30,14 @@ def _start(client, notes=""):
     return client.post("/time/start", data={"csrf_token": t, "client_id": "1", "product_id": "1", "notes": notes})
 
 
+def _form(client):
+    """csrf token + notes version from the Time page, like a browser submitting the form."""
+    html = client.get("/time/").get_data(as_text=True)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+    version = re.search(r'name="version" value="([^"]+)"', html)
+    return {"csrf_token": token, "version": version.group(1) if version else ""}
+
+
 def _backdate_timer(app, hours):
     start = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     with app.app_context():
@@ -48,11 +56,9 @@ def test_timer_start_notes_stop(client, app, clock):
     page = client.get("/time/").get_data(as_text=True)
     assert "Timer running" in page and "checking backups" in page
     assert "Timer running" in client.get("/").get_data(as_text=True)
-    t = csrf(client, "/time/")
-    client.post("/time/timer/notes", data={"csrf_token": t, "notes": "checked backups, patched DC01"})
+    client.post("/time/timer/notes", data={**_form(client), "notes": "checked backups, patched DC01"})
     _backdate_timer(app, 2.5)
-    t = csrf(client, "/time/")
-    client.post("/time/stop", data={"csrf_token": t, "notes": "checked backups, patched DC01"})
+    client.post("/time/stop", data={**_form(client), "notes": "checked backups, patched DC01"})
     e = _entries(app)[0]
     assert 2.5 * 3600 - 5 <= e["duration_seconds"] <= 2.5 * 3600 + 5 and e["ended_at"]
     assert "2.50" in client.get("/time/").get_data(as_text=True)
@@ -84,8 +90,7 @@ def test_forgotten_timer_capped_at_24h(client, app, clock):
     _seed(client, app)
     _start(client)
     _backdate_timer(app, 30)
-    t = csrf(client, "/time/")
-    r = client.post("/time/stop", data={"csrf_token": t, "notes": ""})
+    r = client.post("/time/stop", data={**_form(client), "notes": ""})
     assert "capped=1" in r.headers["Location"]
     assert _entries(app)[0]["duration_seconds"] == 86400
 
@@ -114,8 +119,8 @@ def test_notes_text_never_in_audit_log(client, app, clock):
     do_setup(client, app, clock)
     _seed(client, app)
     _start(client, "reset admin pw to Winter2026!")
-    t = csrf(client, "/time/")
-    client.post("/time/stop", data={"csrf_token": t, "notes": "reset admin pw to Winter2026!"})
+    _backdate_timer(app, 1)
+    client.post("/time/stop", data={**_form(client), "notes": "reset admin pw to Winter2026!"})
     with app.app_context():
         dump = " ".join(str(tuple(r)) for r in get_audit_db().execute("SELECT * FROM audit_log"))
     assert "Winter2026" not in dump
@@ -178,3 +183,63 @@ def test_total_hours_and_client_filter(client, app, clock):
                                        "work_date": "2026-11-05", "hours": hrs, "notes": ""})
     page = client.get("/time/?from=2026-11-01&to=2026-11-30&client=1").get_data(as_text=True)
     assert "Total: 3.75 hours" in page
+
+
+# ---------------------------------------------------------------- review findings
+
+def test_billing_rule_matches_spec_example():
+    from app.billing import billable_hours, line_amount_cents
+    secs = int(43.32 * 3600)
+    assert str(billable_hours(secs)) == "43.32"
+    assert line_amount_cents(secs, 7718) == 334344          # $3,343.44, invoice #1204
+    # 7:20 and 7.33 show the same hours, so they bill the same amount
+    assert line_amount_cents(26400, 7718) == line_amount_cents(26388, 7718) == 56573
+
+
+def test_edit_notes_only_keeps_exact_seconds(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    t = csrf(client, "/time/new")
+    client.post("/time/new", data={"csrf_token": t, "client_id": "1", "product_id": "1",
+                                   "work_date": "2026-11-02", "hours": "1", "notes": ""})
+    with app.app_context():
+        get_db().execute("UPDATE time_entries SET duration_seconds = 26459")   # a timer's odd seconds
+    t = csrf(client, "/time/1")
+    client.post("/time/1", data={"csrf_token": t, "client_id": "1", "product_id": "1",
+                                 "work_date": "2026-11-02", "hours": "7.35", "notes": "added detail"})
+    assert _entries(app)[0]["duration_seconds"] == 26459
+    d = _audit(app, "time_entry_edited")[-1]["details"]
+    assert "hours" not in d and "notes" in d
+
+
+def test_future_dates_rejected(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    t = csrf(client, "/time/new")
+    r = client.post("/time/new", data={"csrf_token": t, "client_id": "1", "product_id": "1",
+                                       "work_date": "2099-12-31", "hours": "1", "notes": ""})
+    assert r.status_code == 400 and _entries(app) == []
+
+
+def test_timer_under_a_minute_is_discarded(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    _start(client)
+    r = client.post("/time/stop", data={**_form(client), "notes": ""})
+    assert "short=1" in r.headers["Location"]
+    e = _entries(app)[0]
+    assert e["deleted_at"] and e["duration_seconds"] is None
+    assert _audit(app, "timer_discarded")
+    assert _start(client).status_code == 302          # can start a new one
+
+
+def test_stale_tab_cannot_overwrite_notes(client, app, clock):
+    do_setup(client, app, clock)
+    _seed(client, app)
+    _start(client, "first")
+    old_tab = _form(client)
+    client.post("/time/timer/notes", data={**_form(client), "notes": "saved from phone"})
+    r = client.post("/time/timer/notes", data={**old_tab, "notes": "old tab text"})
+    assert r.status_code == 400
+    with app.app_context():
+        assert get_db().execute("SELECT notes FROM time_entries").fetchone()[0] == "saved from phone"

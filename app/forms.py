@@ -97,7 +97,8 @@ def hours(form, field: str, label: str) -> int:
     return seconds
 
 
-def date_value(form, field: str, label: str) -> str:
+def date_value(form, field: str, label: str, latest: str | None = None) -> str:
+    """YYYY-MM-DD. `latest` (ISO date) rejects dates after it, e.g. future work dates."""
     from datetime import date
     raw = (form.get(field) or "").strip()
     if not (raw.isascii() and _DATE.match(raw)):
@@ -108,6 +109,8 @@ def date_value(form, field: str, label: str) -> str:
         raise FormError(field, f"{label} must be a valid date.")
     if not 2020 <= d.year <= 2100:
         raise FormError(field, f"{label} is out of range.")
+    if latest is not None and d.isoformat() > latest:
+        raise FormError(field, f"{label} can't be in the future.")
     return d.isoformat()
 
 
@@ -115,7 +118,8 @@ def format_hours(seconds: int | None) -> str:
     """Seconds -> decimal hours with 2 places, the way invoices show them (43.32)."""
     if seconds is None:
         return "—"
-    return str((Decimal(seconds) / 3600).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    from .billing import billable_hours
+    return str(billable_hours(seconds))
 
 
 def format_money(cents: int | None) -> str:
