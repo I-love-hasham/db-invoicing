@@ -331,3 +331,29 @@ def delete(entry_id: int):
                                       "hours": forms.format_hours(entry["duration_seconds"]),
                                       "was_running_timer": entry["duration_seconds"] is None}})
     return redirect(url_for("time.index"))
+
+
+@bp.route("/<int:entry_id>/ai", methods=["POST"])
+def ai_cleanup(entry_id: int):
+    """Suggest cleaner notes. Nothing is saved: the suggestion fills the form for review."""
+    from .. import ai
+    entry = _get_entry(entry_id)
+    clients, products = _active_choices()
+    if all(c["id"] != entry["client_id"] for c in clients):
+        clients = [*clients, {"id": entry["client_id"], "name": entry["client_name"] + " (archived)"}]
+    if all(p["id"] != entry["product_id"] for p in products):
+        products = [*products, {"id": entry["product_id"], "name": entry["product_name"] + " (archived)", "unit": ""}]
+    values = {**dict(entry), "hours": forms.format_hours(entry["duration_seconds"])}
+    _editable_or_400(entry)
+    # keep any unsaved changes on the form (date, hours, client, product) — only notes get the suggestion
+    for k in ("client_id", "product_id", "work_date", "hours"):
+        if request.form.get(k):
+            values[k] = request.form[k]
+    notes = (request.form.get("notes") or entry["notes"]).strip()
+    try:
+        suggestion = ai.clean_up(notes, "entry", target=f"time:{entry_id}", client_id=entry["client_id"])
+    except ai.AIError as e:
+        return render_template("time/form.html", entry={**values, "notes": notes}, clients=clients, products=products,
+                               is_new=False, error=str(e)), 400
+    return render_template("time/form.html", entry={**values, "notes": suggestion}, clients=clients,
+                           products=products, is_new=False, ai_original=notes)

@@ -334,9 +334,11 @@ def test_redirects_are_never_followed(monkeypatch):
     t = th.Thread(target=srv.handle_request, daemon=True)
     t.start()
     url = "http://127.0.0.1:%d/token" % srv.server_port
-    req = graph.urllib.request.Request(url, data=b"x", headers={"Authorization": "Bearer secret"}, method="POST")
-    with pytest.raises(graph.GraphError, match="redirect"):
-        graph._opener.open(req, timeout=5)      # the same opener _post uses
+    import urllib.request
+    req = urllib.request.Request(url, data=b"x", headers={"Authorization": "Bearer secret"}, method="POST")
+    from app import outbound
+    with pytest.raises(outbound.OutboundError, match="redirect"):
+        outbound.opener.open(req, timeout=5)    # the same opener every outside call uses
     srv.server_close()
     assert len(hits) == 1          # the redirect target was never contacted
 

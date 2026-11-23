@@ -21,9 +21,19 @@
     <input type="date" id="work_date" name="work_date" value="{{ entry.work_date or '' }}" required>
     <label for="hours">Hours (7.5 or 7:30)</label>
     <input type="text" id="hours" name="hours" value="{{ entry.hours or '' }}" required maxlength="5" inputmode="decimal">
+    {% if ai_original %}
+    <div class="notice"><strong>AI suggestion below — review it, then Save.</strong> Your original notes:
+      <pre class="email">{{ ai_original }}</pre></div>
+    {% endif %}
     <label for="notes">Notes (these become invoice lines — no passwords)</label>
     <textarea id="notes" name="notes" rows="4" maxlength="2000">{{ entry.notes or '' }}</textarea>
     <button type="submit">Save</button>
+    {% if not is_new %}
+    <button type="submit" formaction="{{ url_for('time.ai_cleanup', entry_id=entry.id) }}" class="secondary">✨ Clean up notes with AI</button>
+    <p class="ai-warning">⚠ <strong>AI button:</strong> sends these notes to Claude (Anthropic) to rewrite. Don't include passwords,
+      client personal or confidential information, or anything you wouldn't put on the invoice. Common passwords are
+      blocked automatically, but no filter catches everything. Nothing is sent until you click the button.</p>
+    {% endif %}
   </form>
   {% if not is_new %}
   <form method="post" action="{{ url_for('time.delete', entry_id=entry.id) }}">

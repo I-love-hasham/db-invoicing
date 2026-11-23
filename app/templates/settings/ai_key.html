@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Claude API key{% endblock %}
+{% block content %}
+<div class="card narrow">
+  <h1>Claude API key</h1>
+  <p class="muted">Stored encrypted on the server. Create a key just for this app in the Anthropic console,
+    with a $5/month spending limit.</p>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="api_key">API key</label>
+    <input type="password" id="api_key" name="api_key" maxlength="250" autocomplete="off">
+    <button type="submit">Save key</button>
+  </form>
+  {% if status.configured %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="remove" value="yes">
+    <button type="submit" class="danger">Remove key (turns AI cleanup off)</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

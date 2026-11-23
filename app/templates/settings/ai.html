@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}AI note cleanup{% endblock %}
+{% block content %}
+<h1>AI note cleanup</h1>
+<div class="card">
+  {% if status.configured %}
+    <p class="ok">On — using {{ status.model }} with key …{{ status.last4 }}.</p>
+    <p class="muted">Used today: {{ status.used_today }} of {{ status.daily_limit }}.</p>
+  {% else %}
+    <p class="bad">Off — no API key saved.</p>
+  {% endif %}
+  <p><a href="{{ url_for('settings.ai_key') }}">{% if status.configured %}Change or remove the key{% else %}Add a Claude API key{% endif %}</a>
+    <span class="muted">(asks for 2FA, raises an alert)</span></p>
+</div>
+<div class="card">
+  <h2>Security notice</h2>
+  <p class="ai-warning">Anything you send with an AI button leaves your server and goes to Anthropic (the maker of Claude).
+    Don't put passwords, client personal or confidential information, or anything you wouldn't print on an invoice in
+    notes you send. Common passwords, keys, PIN codes and card numbers are blocked automatically, but no filter is
+    perfect — you are the last check. Credentials belong in IT Glue, not in billing notes.</p>
+</div>
+<div class="card">
+  <h2>What gets sent</h2>
+  <p>Only the note text you choose to clean up. Whatever you typed in those notes goes with it — including
+    any names — so keep notes to the work done. Nothing else is sent: no amounts, dates or client records.</p>
+  <p>Notes that look like they contain a password, key, token or card number are refused before anything is sent.</p>
+  <p>The AI only suggests. Nothing changes until you review the suggestion and click Save.</p>
+  <p class="muted">Keep a monthly spending limit on the key in the Anthropic console ($5 is plenty).</p>
+</div>
+{% endblock %}
