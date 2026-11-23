@@ -39,8 +39,21 @@ jobs:
           persist-credentials: false
       - name: Build image
         run: docker build -t db-invoicing:ci .
+      - name: Smoke test (container starts locked down and answers)
+        run: |
+          gen() { python3 -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"; }
+          printf 'SECRET_KEY=%s\nAUDIT_HMAC_KEY=%s\nENCRYPTION_KEY=%s\nSETUP_TOKEN=%s\n' "$(gen)" "$(gen)" "$(gen)" "$(gen)" > ci.env
+          docker run -d --name smoke --env-file ci.env --read-only --tmpfs /tmp \
+            --tmpfs /data:uid=10001,gid=10001,mode=0700 --cap-drop ALL \
+            --security-opt no-new-privileges:true -p 127.0.0.1:8080:8080 db-invoicing:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login)
+          docker logs smoke
+          test "$code" = 302
+          test "$(docker exec smoke id -u)" = 10001
+          rm -f ci.env
       - name: Trivy scan (fails on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: db-invoicing:ci
           severity: HIGH,CRITICAL

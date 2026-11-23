@@ -22,7 +22,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && python -m pip uninstall -y pip \
- && rm -rf /usr/local/lib/python3.13/ensurepip \
+ && python -c "import ensurepip, os, shutil; shutil.rmtree(os.path.dirname(ensurepip.__file__))" \
  && groupadd --system --gid 10001 app \
  && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
  && mkdir /data && chown app:app /data && chmod 700 /data
